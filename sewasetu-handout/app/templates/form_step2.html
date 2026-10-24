@@ -1,18 +1,2 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="steps"><b>Step 3 of 6:</b> Address Details</div>
-<h2>Address Details</h2>
-<form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label>Village / Town</label>
-  <input type="text" name="village" value="{{ data.get('village','') }}">
-  <label>Block</label>
-  <select name="block">
-    <option value="">--Select--</option>
-    {% for b in blocks %}
-    <option {% if data.get('block')==b %}selected{% endif %}>{{ b }}</option>
-    {% endfor %}
-  </select>
-  <p><button class="btn" type="submit">Save &amp; Continue</button></p>
-</form>
-{% endblock %}
+{% extends 'base.html' %}{% import '_fields.html' as f with context %}{% block content %}{% include '_progress.html' %}<h2>Address details</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><fieldset><legend>Address details</legend>{{ f.input('village','Village or town',data,autocomplete='address-level3') }}
+{{ f.select('block','Block',data,blocks) }}</fieldset><div class="actions"><button>Save and continue</button><button class="secondary" name="navigation" value="back" formnovalidate>Save and go back</button></div></form><p><a href="/form/1">Return to the previous saved step</a> without saving this page.</p>{% endblock %}

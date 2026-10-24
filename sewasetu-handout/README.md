@@ -54,7 +54,7 @@ Container builds, the full Compose topology, production configuration, migration
 
 ## Current limitations
 
-Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Access protection and OTP-based legacy-account continuity are implemented and privately tested. Statutory processing/outbox and resilient submissions are privately verified. Actual scheduled container execution, inclusive uploads, pending corrections and faithful Indic identity remain pending. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
+Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Access protection and OTP-based legacy-account continuity are implemented and privately tested. Statutory processing/outbox and resilient submissions are privately verified. Citizen forms, uploads and pending corrections are privately verified. Actual scheduled container execution and faithful Indic identity remain pending. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
 
 Local planning/agent notes are excluded by the user's ignore policy. This omits agent configuration and prompt evidence required by BRIEF.md; regression tests remain trackable and are not omitted from the repository.
 
@@ -73,7 +73,7 @@ Use the separate database-owner environment for these commands; do not inject mi
 
 Citizen tracking and recovery use delivered purpose-bound OTPs, including inherited accounts; original account hashes remain unchanged. A verified contact can access associated applications. Shared-phone users share contact access. The public assessment gateway exposes OTPs and provides no real SMS confidentiality. Logout revokes server-side sessions; recovery revokes previous citizen sessions. Staff and citizen authentication rotate opaque cookie identifiers. All form POSTs require CSRF tokens. Session idle/absolute limits are 30 minutes/two hours; OTP lifetime is five minutes. Staff role and citizen ownership are checked before receipt cache access.
 
-The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience is implemented. Final upload/form design, Unicode receipts, operations and public verification remain pending.
+The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience is implemented. Citizen form design is implemented. Unicode receipts, operations and public verification remain pending.
 
 ## Statutory decisions and notifications
 
@@ -106,3 +106,23 @@ Each verified draft has a unique intent key. Acceptance locks that draft and ato
 SMS delivery and PDF rendering do not run inside acceptance. An authorized receipt is generated on demand after releasing PostgreSQL, with bounded file-lock wait, an atomic private cache and a data/version fingerprint. A failed PDF can be retried while tracking remains available. Cache authorization always precedes file access. The original thousands of decorative PDF line operations are removed. Rendering faithful Indic identity remains the next dedicated data-format fix.
 
 The controlled full-data replay passed after this change: all 20 burst retry responses returned one result for each of five intents; no duplicates, missing intents, reference collisions or HTTP errors. On this small local scenario, submission p95 fell from 55.147 to 39.491 ms during burst and 55.926 to 31.282 ms during baseline, including the new success redirect. These are four-worker localhost measurements, not production capacity or an SLO. Original application/account checksums were unchanged. Final release measurements must be repeated after later changes.
+
+## Citizen forms and corrections
+
+The five saved steps use server validation, explicit labels, linked errors and retained inputs. No JavaScript is required. Widow applications do not require a deceased spouse employer. Distinct adults can use one contact; a similar name/DOB creates a warning that can be acknowledged for a different eligible applicant, rather than a universal person identifier. All final fields, document state and the declaration are checked again on the server. A draft version prevents stale review from accepting changed values.
+
+JPG/JPEG/PDF uploads accept at most 5,242,880 bytes. Generated private paths never use the original filename. Content decoding runs with a four-second wall limit, two CPU seconds and 256MiB memory; a complex/unreadable or encrypted file gets an actionable error. Documents download only after owner/staff authorization. Saved details remain when a file fails. Drafts expire after seven days; cleanup preserves every accepted proof, including older proof referenced by correction audit evidence. Accepted intent records retain only their result, not a second copy of form data.
+
+A verified owner can edit allowlisted values only while PENDING, review before/after values, and prove sensitive changes with a fresh code bound to that application/version/change digest. Commit locks and rechecks both record and proposal, stores changed values in private audit, increments receipt version and preserves ID/number/contact/original submission date. A newer correction or decision rejects the stale request. Self-service cannot replace both original name and DOB. Decided cases and identity substitution require assisted verification; no verified assisted contact channel was supplied, so the portal states that limitation without inventing contact details.
+
+Tracking lists the contact's accepted records and saved drafts. Fresh contact verification can resume an owned draft even after intake closure, but cannot turn it into a new accepted application after the configured deadline. Operational logs omit bank/name/code payloads; private audit retains necessary before/after evidence.
+
+Browser verification (development tools only):
+
+```sh
+.venv/bin/python -m pip install -r tests/requirements-browser.txt
+.venv/bin/python -m playwright install chromium
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/browser_journey.py
+```
+
+This owns a disposable synthetic PostgreSQL/Gunicorn/gateway stack and accepts no external target. It tests two real no-JS applications, a widow, shared phone, PDF/JPG above the old limit, linked errors/input retention, keyboard navigation, owner correction, staff and gateway, mobile 390px and a 200%-equivalent reflow configuration. Optional `--screenshots /PRIVATE/OUTPUT` captures synthetic images for review; keep them out of Git. The private fixture uses a one-second resend cooldown to keep the browser test bounded; normal runtime defaults to 60 seconds and dedicated security tests verify it. These checks are not a claim of full WCAG certification.

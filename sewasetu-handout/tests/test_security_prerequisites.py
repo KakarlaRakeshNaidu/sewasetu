@@ -16,7 +16,7 @@ from security_support import (ROOT, csrf_fields, post, query, security, staff_lo
 def test_verified_form_session_survives_ten_minutes_below_idle_limit(security):
     client = security.portal.app.test_client()
     verified_application(security, client)
-    post(client, "/form/1", {"applicant_name": "Synthetic Saved Name", "dob": "13/12/1950"})
+    post(client, "/form/1", {"applicant_name": "Synthetic Saved Name", "dob": "13/12/1950", "gender":"Male", "marital_status":"Unmarried"})
     security.clock.instant += timedelta(minutes=10)
     response = client.get("/form/2")
     assert response.status_code == 200, "Form session expired at the OTP lifetime rather than its idle limit"

@@ -1,0 +1,10 @@
+{% macro input(name,label,data,hint='',required=true,maximum=100,autocomplete='off',inputmode='text') -%}
+{% set problems=errors|default({}) %}<label for="{{ name }}">{{ label }} <span>({{ 'required' if required else 'optional' }})</span></label>
+{% if hint %}<span class="hint" id="{{ name }}-hint">{{ hint }}</span>{% endif %}
+{% if problems.get(name) %}<span class="error" id="{{ name }}-error">{{ problems[name] }}</span>{% endif %}
+<input id="{{ name }}" name="{{ name }}" type="text" value="{{ data.get(name,'') }}" maxlength="{{ maximum }}" autocomplete="{{ autocomplete }}" inputmode="{{ inputmode }}" {% if required %}required{% endif %} {% if problems.get(name) %}aria-invalid="true"{% endif %} {% if hint or problems.get(name) %}aria-describedby="{% if hint %}{{ name }}-hint {% endif %}{% if problems.get(name) %}{{ name }}-error{% endif %}"{% endif %}>
+{%- endmacro %}
+{% macro select(name,label,data,choices) -%}{% set problems=errors|default({}) %}
+<label for="{{ name }}">{{ label }} <span>(required)</span></label>{% if problems.get(name) %}<span class="error" id="{{ name }}-error">{{ problems[name] }}</span>{% endif %}
+<select id="{{ name }}" name="{{ name }}" required {% if problems.get(name) %}aria-invalid="true"{% endif %} {% if problems.get(name) %}aria-describedby="{{ name }}-error"{% endif %}><option value="">Choose an option</option>{% if data.get(name) and data.get(name) not in choices %}<option selected disabled value="{{ data.get(name) }}">Previously entered: {{ data.get(name) }} (choose a listed option)</option>{% endif %}{% for choice in choices %}<option value="{{ choice }}" {% if data.get(name)==choice %}selected{% endif %}>{{ choice }}</option>{% endfor %}</select>
+{%- endmacro %}

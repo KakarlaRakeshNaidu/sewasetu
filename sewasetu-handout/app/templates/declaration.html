@@ -1,14 +1,4 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="steps"><b>Step 6 of 6:</b> Declaration</div>
-<h2>Declaration</h2>
-<p>I hereby declare that the information furnished above is true to the best of my
-knowledge and belief. I understand that furnishing false information is punishable
-under applicable law and will result in cancellation of pension.</p>
-<form method="post">
-  <input type="hidden" name="submission_key" value="{{ submission_key }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <p><input type="checkbox" required> I agree to the above declaration.</p>
-  <p><button class="btn" type="submit">Submit Application</button></p>
-</form>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}{% include '_progress.html' %}<h2>Review and declare</h2><p>Check every detail before accepting the declaration.</p>{% include '_details.html' %}<p><a href="/form/1">Edit personal details</a> · <a href="/form/2">Edit address</a> · <a href="/form/3">Edit bank details</a></p><p id="document">{% if document_ready %}<a href="/draft/document">Review saved age proof</a>{% else %}<a href="/upload">Upload age proof</a>{% endif %}</p>
+<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="submission_key" value="{{ submission_key }}"><input type="hidden" name="version" value="{{ version }}">
+{% if duplicate %}<div class="notice">A record with this name and DOB is already linked to this contact. <a href="/status">Check existing records</a>. Names and DOB alone do not establish a universal identity.</div><label class="check" for="duplicate_ack"><input id="duplicate_ack" name="duplicate_ack" type="checkbox" value="yes">I checked and this is a different eligible applicant, rather than a retry of the earlier application.</label>{% endif %}
+<label class="check" for="declaration"><input id="declaration" name="declaration" type="checkbox" value="yes" required>I declare that these details are true to the best of my knowledge and that I am applying once for this applicant; this is not a retry of an already accepted application. I understand that incorrect information requires review.</label><div class="actions"><button>Submit application</button><a class="button secondary" href="/upload">Back to saved document</a></div></form>{% endblock %}

@@ -1,18 +1,2 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>Application Status</h2>
-<table class="tbl" style="max-width:640px">
-  <tr><th>Application No</th><td>{{ a[0] }}</td></tr>
-  <tr><th>Applicant Name</th><td>{{ a[1] }}</td></tr>
-  <tr><th>Mobile</th><td>{{ a[2] }}</td></tr>
-  <tr><th>Date of Birth</th><td>{{ a[3] }}</td></tr>
-  <tr><th>Village</th><td>{{ a[4] }}</td></tr>
-  <tr><th>Block</th><td>{{ a[5] }}</td></tr>
-  <tr><th>Bank Account</th><td>{{ a[6] }}</td></tr>
-  <tr><th>IFSC</th><td>{{ a[7] }}</td></tr>
-  <tr><th>Status</th><td><b>{{ a[8] }}</b></td></tr>
-  <tr><th>Submitted</th><td>{{ a[9] }}</td></tr>
-  <tr><th>Decided</th><td>{{ a[10] or '-' }}</td></tr>
-</table>
-<p><a href="/ack/{{ app_id }}.pdf">Download Acknowledgment (PDF)</a></p>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<h2>Application status</h2><p><strong>{{ a[0] }}</strong> <span class="tag">{{ a[8] }}</span></p><dl class="record"><dt>Applicant name</dt><dd>{{ a[1] }}</dd><dt>Mobile contact</dt><dd>{{ a[2] }}</dd><dt>Date of birth</dt><dd>{{ a[3]|dob_display }}</dd><dt>Village or town</dt><dd>{{ a[4] }}</dd><dt>Block</dt><dd>{{ a[5] }}</dd><dt>Bank account</dt><dd>{{ a[6] }}</dd><dt>IFSC</dt><dd>{{ a[7] }}</dd><dt>Original submission</dt><dd>{{ a[9]|local_time }}</dd><dt>Decision</dt><dd>{{ a[10]|local_time }}</dd></dl>
+<p>{% if document_ready %}<a href="/document/{{ app_id }}">Download age-proof document</a>{% else %}No document file is available in this record. Tracking remains available; do not reapply to replace an inherited missing file.{% endif %}</p><div class="actions"><a class="button" href="/ack/{{ app_id }}.pdf">Download receipt (PDF)</a>{% if a[8]=='PENDING' and session.get('role')=='citizen' %}<a class="button secondary" href="/application/{{ app_id }}/edit">Correct application</a>{% endif %}<a class="button secondary" href="/status">All associated records and drafts</a></div>{% if a[8]!='PENDING' %}<p>Self-service correction is unavailable after a decision. A verified assisted correction channel has not been supplied.</p>{% endif %}{% endblock %}

@@ -12,7 +12,8 @@ from werkzeug.datastructures import CallbackDict
 
 class ServerSession(CallbackDict, SessionMixin):
     def __init__(self, values=None, sid=None, fresh=True, created=None):
-        super().__init__(values or {})
+        super().__init__(values or {},lambda value:setattr(value,'modified',True))
+        self.modified=False
         self.sid = sid or secrets.token_urlsafe(32)
         self.fresh, self.created = fresh, created
 
@@ -26,6 +27,8 @@ class Sessions(SessionInterface):
         return hashlib.sha256(sid.encode()).hexdigest()
 
     def open_session(self, app, req):
+        if req.path.startswith('/static/') or req.path in ('/health/live','/health/ready'):
+            return self.null_session_class()
         sid = req.cookies.get(app.config['SESSION_COOKIE_NAME'], '')
         now = self.now()
         if len(sid) == 43:
@@ -51,24 +54,30 @@ class Sessions(SessionInterface):
         session.sid, session.fresh, session.created = secrets.token_urlsafe(32), True, self.now()
 
     def save_session(self, app, value, response):
-        now = self.now()
-        created = value.created or now
-        expiry = created + timedelta(seconds=self.config['absolute'])
-        value['_epoch'] = hashlib.sha256(self.config['secret'].encode()).hexdigest()
+        now=self.now()
+        created=value.created or now
+        expiry=created+timedelta(seconds=self.config['absolute'])
+        epoch=hashlib.sha256(self.config['secret'].encode()).hexdigest()
+        if value.get('_epoch')!=epoch:value['_epoch']=epoch
+        fresh=value.fresh
         with self.db() as cur:
-            if value.fresh:
-                cur.execute("INSERT INTO web_sessions(token_hash,data,created_at,touched_at,expires_at) VALUES(%s,%s,%s,%s,%s)",
-                    (self.digest(value.sid), json.dumps(dict(value)),created,now,expiry))
+            if fresh:
+                cur.execute('INSERT INTO web_sessions(token_hash,data,created_at,touched_at,expires_at) VALUES(%s,%s,%s,%s,%s)',
+                    (self.digest(value.sid),json.dumps(dict(value)),created,now,expiry))
+            elif value.modified:
+                cur.execute('UPDATE web_sessions SET data=%s,touched_at=%s WHERE token_hash=%s AND NOT revoked AND expires_at>%s',
+                    (json.dumps(dict(value)),now,self.digest(value.sid),now))
             else:
-                # UPDATE avoids resurrecting a concurrently revoked session.
-                cur.execute("UPDATE web_sessions SET data=%s,touched_at=%s WHERE token_hash=%s AND NOT revoked AND expires_at>%s",
-                    (json.dumps(dict(value)), now,self.digest(value.sid),now))
-                if cur.rowcount != 1:
-                    response.delete_cookie(app.config['SESSION_COOKIE_NAME'])
-                    return
-        value.fresh, value.created = False, created
-        response.set_cookie(app.config['SESSION_COOKIE_NAME'],value.sid,httponly=True,
-            secure=self.config['secure'],samesite='Lax',path='/',max_age=self.config['absolute'])
+                # A read-only response must not overwrite context changed by a concurrent request.
+                cur.execute('UPDATE web_sessions SET touched_at=%s WHERE token_hash=%s AND NOT revoked AND expires_at>%s',
+                    (now,self.digest(value.sid),now))
+            if cur.rowcount!=1:
+                # The browser may already have a newer cookie from the request that revoked this ID.
+                return
+        value.fresh,value.created,value.modified=False,created,False
+        if fresh:
+            response.set_cookie(app.config['SESSION_COOKIE_NAME'],value.sid,httponly=True,
+                secure=self.config['secure'],samesite='Lax',path='/',max_age=max(0,int((expiry-now).total_seconds())))
         response.vary.add('Cookie')
 
 
@@ -92,7 +101,7 @@ def install(app, db, now, config):
                 abort(403)
     @app.after_request
     def private_headers(response):
-        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Cache-Control'] = 'public, max-age=0, must-revalidate' if request.path.startswith('/static/') else 'private, no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'same-origin'
         response.headers['X-Frame-Options'] = 'DENY'

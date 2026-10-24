@@ -1,12 +1,5 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>About the Scheme</h2>
-<p>The Old Age Pension Scheme is implemented by the Department of Social Welfare,
-Government of Purvanchal, under the State Social Assistance Programme.</p>
-<p>Eligibility: residents of Purvanchal above 60 years of age. One application per
-eligible citizen. Applications are processed within 15 days as per the Purvanchal
-Right to Public Services Act; applications not processed within the statutory
-period stand approved (deemed approval).</p>
-<p>Scheme guidelines: <a href="/downloads/oap-guidelines-2023.pdf">OAP Guidelines 2023 (PDF)</a></p>
-<p>Beneficiary list: <a href="http://swd.purvanchal.nic.in/oap/beneficiary-list">District-wise beneficiary list</a></p>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<h2>Scheme and service information</h2><h3>Eligibility and timing</h3><p>The applicant must be 60 years or above on the application date. New applications close at {{ deadline_label }}. Pending applications reaching the 15-day decision limit are processed by the statutory deemed-approval job.</p>
+<h3>What to prepare</h3><p>Enter the name as on age proof and DOB as DD/MM/YYYY. Use a readable JPG, JPEG or unencrypted PDF up to 5MiB. The inherited portal lists birth certificate, school-leaving certificate or voter ID as age-proof examples.</p><p>Keep bank account digits, including leading zeros, and the 11-character IFSC. This portal checks format and does not verify actual bank ownership.</p>
+<h3>One application per person</h3><p>Use an existing pending record for corrections instead of applying again. Start a separate application only for a different eligible person.</p><h3>Shared phones and existing records</h3><p>Distinct adults can use one contact number. A verified contact can view associated records; a phone is not a universal person identifier. Original records and application numbers are retained. Some inherited records have no document file; tracking still works without reapplying.</p>
+<h3>Correct a pending application</h3><p>Verify the contact, open the record and choose Correct application. Review changed values and use a fresh code for sensitive changes. ID, number, contact, decision and original submission date cannot be edited. A racing decision or newer edit stops a stale correction.</p><p>After a decision, self-service correction is unavailable. A verified assisted correction channel has not been supplied. Do not delete and reapply to hide a mistake.</p>
+<h3>Assessment SMS simulation</h3><p>The required <a href="/__gateway/">SMS console and inbox</a> are public. Delivered codes can be read there. This simulation cannot provide real-world SMS confidentiality.</p><p><a href="/status">Track or resume</a></p>{% endblock %}

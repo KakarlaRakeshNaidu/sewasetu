@@ -1,12 +1,1 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>Application Submitted</h2>
-<p>Your application has been received and saved. SMS delivery and receipt generation may be retried independently.</p>
-<table class="tbl" style="max-width:480px">
-  <tr><th>Application Number</th><td><b>{{ app_no }}</b></td></tr>
-</table>
-<p class="note">Please note down your Application Number. You can check your
-application status on the <a href="/status">status portal</a> using your mobile
-number and a one-time verification code.</p>
-<p><a href="/ack/{{ app_id }}.pdf"><button class="btn">Download Acknowledgment (PDF)</button></a></p>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<h2>Application received</h2><p>Your application is saved. SMS delivery and receipt generation can be retried independently.</p><dl class="record"><dt>Application number</dt><dd><strong>{{ app_no }}</strong></dd></dl><p>Keep this number. Tracking uses your verified mobile contact and a one-time code; there is no default DOB password.</p><div class="actions"><a class="button" href="/application/{{ app_id }}">View status or correct details</a><a class="button secondary" href="/ack/{{ app_id }}.pdf">Download receipt (PDF)</a></div>{% endblock %}

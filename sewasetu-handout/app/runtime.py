@@ -1,5 +1,6 @@
 """Validated shared settings and bounded process-local PostgreSQL pool."""
 import os
+import threading
 from datetime import datetime
 from urllib.parse import urlparse
 from sqlalchemy import create_engine
@@ -46,15 +47,17 @@ def settings():
 class Database:
     def __init__(self, config):
         self.config, self.pid, self.engine = config, None, None
+        self.initialization_lock=threading.Lock()
 
     def connect(self):
-        if self.pid != os.getpid():
-            if self.engine is not None:
-                self.engine.dispose(close=False)
-            self.engine = create_engine(self.config["database_url"], pool_size=self.config["pool_size"],
-                max_overflow=self.config["pool_overflow"], pool_timeout=2, pool_pre_ping=True,
-                connect_args={"connect_timeout":5, "options":"-c statement_timeout=5000 -c lock_timeout=2000"})
-            self.pid = os.getpid()
+        with self.initialization_lock:
+            if self.pid != os.getpid():
+                if self.engine is not None:
+                    self.engine.dispose(close=False)
+                self.engine = create_engine(self.config["database_url"], pool_size=self.config["pool_size"],
+                    max_overflow=self.config["pool_overflow"], pool_timeout=2, pool_pre_ping=True,
+                    connect_args={"connect_timeout":5, "options":"-c statement_timeout=5000 -c lock_timeout=2000"})
+                self.pid = os.getpid()
         connection = self.engine.raw_connection()
         if self.config["mode"] == "production":
             try:

@@ -1,12 +1,2 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="steps"><b>Step 1 of 6:</b> Mobile Verification</div>
-<h2>Enter OTP</h2>
-<p class="note">An OTP has been sent to {{ mobile }}.</p>
-<form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label>OTP</label>
-  <input type="text" name="otp" maxlength="6" style="max-width:160px">
-  <p><button class="btn" type="submit">Verify</button></p>
-</form>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<h2>Enter your one-time code</h2><p>A code was sent to {{ mobile }}. It expires after five minutes and can be used once. A new code replaces the previous code.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="otp">Six-digit code (required)</label><input id="otp" type="text" name="otp" maxlength="6" inputmode="numeric" autocomplete="one-time-code" required><div class="actions"><button>Verify and continue</button></div></form>
+{% if correction_id %}<form method="post" action="/application/{{ correction_id }}/edit/request-code"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary">Request a replacement code</button></form>{% else %}<p><a href="{{ '/apply' if session.get('purpose')=='apply' else '/status' }}">Request a new code</a>; your saved draft is retained.</p>{% endif %}<p class="note">The assessment gateway inbox is public. It provides simulated delivery, not confidential SMS.</p>{% endblock %}

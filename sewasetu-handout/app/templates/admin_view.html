@@ -2,33 +2,33 @@
 {% block content %}
 <h2>Application {{ a[0] }}</h2>
 <p><a href="/admin/applications">&laquo; Back to list</a></p>
-<table class="tbl" style="max-width:640px">
+<div class="table-scroll" tabindex="0" role="region" aria-label="Staff application data"><table class="tbl" style="max-width:640px">
   <tr><th>Applicant Name</th><td>{{ a[1] }}</td></tr>
   <tr><th>Mobile</th><td>{{ a[2] }}</td></tr>
-  <tr><th>Date of Birth</th><td>{{ a[3] }}</td></tr>
+  <tr><th>Date of Birth</th><td>{{ a[3]|dob_display }}</td></tr>
   <tr><th>Gender</th><td>{{ a[4] }}</td></tr>
   <tr><th>Marital Status</th><td>{{ a[5] }}</td></tr>
   <tr><th>Village</th><td>{{ a[6] }}</td></tr>
   <tr><th>Block</th><td>{{ a[7] }}</td></tr>
   <tr><th>Bank Account</th><td>{{ a[8] }}</td></tr>
   <tr><th>IFSC</th><td>{{ a[9] }}</td></tr>
-  <tr><th>Document</th><td>{{ a[10] or '-' }}</td></tr>
+  <tr><th>Document</th><td>{% if document_ready %}<a href="/document/{{ app_id }}">Download age proof</a>{% else %}No document file is available in this inherited record.{% endif %}</td></tr>
   <tr><th>Status</th><td><b>{{ a[11] }}</b></td></tr>
-  <tr><th>Submitted</th><td>{{ a[12] }}</td></tr>
-  <tr><th>Decided</th><td>{{ a[13] or '-' }} {{ a[14] or '' }}</td></tr>
-</table>
+  <tr><th>Submitted</th><td>{{ a[12]|local_time }}</td></tr>
+  <tr><th>Decided</th><td>{{ a[13]|local_time }} {{ a[14] or '' }}</td></tr>
+</table></div>
 {% if a[11] == 'PENDING' %}
 <p>
 <form method="post" action="/admin/approve/{{ app_id }}" style="display:inline">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button class="btn" type="submit">Approve</button>
+  <button class="btn" type="submit">Confirm approval</button>
 </form>
 &nbsp;
 <form method="post" action="/admin/reject/{{ app_id }}" style="display:inline">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button class="btn" style="background:#a33" type="submit">Reject</button>
+  <button class="btn" style="background:#a33" type="submit">Confirm rejection</button>
 </form>
 </p>
 {% endif %}
-<h3>Decision history</h3><table class="tbl"><tr><th>Event</th><th>Actor</th><th>Time</th></tr>{% for event,actor,time in history %}<tr><td>{{ event }}</td><td>{{ actor }}</td><td>{{ time }}</td></tr>{% endfor %}</table>
+<h3>Decision history</h3><div class="table-scroll" tabindex="0" role="region" aria-label="Staff application data"><table class="tbl"><tr><th>Event</th><th>Actor</th><th>Time</th></tr>{% for event,actor,time,changes in history %}<tr><td>{{ event }}{% if changes %}<details><summary>Reviewed changes</summary>{% for field,value in changes.items() %}{% if field!='_identity_origin' %}<p><strong>{{ field }}</strong>: {% if field=='doc_path' %}Previous proof → Replacement proof{% else %}{{ value.get('before','Not recorded') }} → {{ value.get('after','Not recorded') }}{% endif %}</p>{% endif %}{% endfor %}</details>{% endif %}</td><td>{{ actor }}</td><td>{{ time|local_time }}</td></tr>{% endfor %}</table></div>
 {% endblock %}

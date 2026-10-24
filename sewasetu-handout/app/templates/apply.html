@@ -1,14 +1,3 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="steps"><b>Step 1 of 6:</b> Mobile Verification &rsaquo; Personal Details &rsaquo; Address &rsaquo; Bank Details &rsaquo; Document Upload &rsaquo; Declaration</div>
-<h2>Mobile Verification</h2>
-<form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label>Mobile Number</label>
-  <input type="text" name="mobile" maxlength="10" placeholder="10 digit mobile number">
-  <label>Security Check: What is {{ captcha_q }}?</label>
-  <input type="text" name="captcha" style="max-width:120px">
-  <p><button class="btn" type="submit">Send OTP</button></p>
-</form>
-<p class="note">An OTP will be sent to your mobile number by SMS. OTP is valid for 5 minutes.</p>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<h2>Verify your contact to apply</h2><p>A code is valid for five minutes. Your form has a separate 30-minute idle timeout and a saved draft lasts seven days. Reverify to resume an owned draft.</p><p class="note">A shared number can be used by distinct adults. It gives contact access to their associated records.</p>
+<form method="post"> <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="mobile">Mobile number (required)</label><input id="mobile" name="mobile" type="text" maxlength="10" inputmode="numeric" autocomplete="tel-national" value="{{ request.form.get('mobile',session.get('apply_mobile',session.get('portal_mobile',''))) }}" required aria-describedby="mobile-help"><span class="hint" id="mobile-help">Enter a ten-digit Indian mobile number.</span><label for="captcha">Security check: what is {{ captcha_q }}? (required)</label><input id="captcha" name="captcha" inputmode="numeric" autocomplete="off" required>
+<div class="actions"><button>Send code and continue</button>{% if session.get('resume_draft') or session.get('draft_id') %}<button class="secondary" name="new" value="1">Start a separate new draft</button>{% endif %}</div></form><p class="note">The public assessment SMS inbox is a simulation and is not confidential.</p>{% endblock %}

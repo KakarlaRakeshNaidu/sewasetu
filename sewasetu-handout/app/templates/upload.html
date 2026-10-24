@@ -1,13 +1,2 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="steps"><b>Step 5 of 6:</b> Document Upload</div>
-<h2>Upload Age Proof Document</h2>
-<p class="note">Accepted documents: Birth certificate, School leaving certificate,
-Voter ID. Accepted formats: <b>JPG or PDF, maximum size 5 MB</b>.</p>
-<form method="post" enctype="multipart/form-data">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label>Select Document</label>
-  <input type="file" name="document">
-  <p><button class="btn" type="submit">Upload &amp; Continue</button></p>
-</form>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}{% include '_progress.html' %}<h2>Upload age proof</h2><p>Choose a readable JPG, JPEG or unencrypted PDF, up to <strong>5MiB (5,242,880 bytes)</strong>. File contents and size are checked. Other form details stay saved if a file fails.</p>
+<form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="document">Age-proof document (required)</label><input id="document" name="document" type="file" accept=".jpg,.jpeg,.pdf,image/jpeg,application/pdf" aria-describedby="document-hint document-error"><span id="document-hint" class="hint">Choose the complete original file again if an upload fails.</span>{% if errors and errors.get('document') %}<span id="document-error" class="error">{{ errors['document'] }}</span>{% endif %}<div class="actions"><button>Upload and continue</button>{% if document_ready %}<button class="secondary" name="keep" value="yes">Keep saved document and continue</button>{% endif %}</div></form><p><a href="/form/3">Back to saved bank details</a></p>{% if document_ready %}<p>Document saved. <a href="/draft/document">Download the saved proof to review</a>.</p>{% endif %}{% endblock %}

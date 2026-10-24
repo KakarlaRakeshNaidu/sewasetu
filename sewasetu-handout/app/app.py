@@ -198,7 +198,7 @@ def apply():
         else:
             challenge = issue(transaction,now,SETTINGS,mobile,'apply',send_sms)
             if challenge:
-                reference = session.get('draft_id') or session.get('resume_draft')
+                reference = None if request.form.get('new')=='1' else session.get('draft_id') or session.get('resume_draft')
                 sessions.rotate({'challenge':challenge,'purpose':'apply','apply_mobile':mobile,'resume_draft':reference})
                 return redirect(url_for('verify'))
             flash('A code was recently requested or delivery is unavailable. Please wait before retrying; your draft is saved.')
@@ -217,14 +217,14 @@ def verified_challenge(purpose):
         flash('Code invalid, expired or already used. Request a new code; your draft is saved.')
         return None
     reference = session.get('resume_draft')
-    values = {'role':'citizen','logged_in':True,'portal_mobile':mobile}
+    values = {'role':'citizen','logged_in':True,'portal_mobile':mobile,'auth_at':now().isoformat()}
     if purpose == 'apply':
         values['verified_mobile'] = mobile
         with transaction() as cur:
-            cur.execute('SELECT id,data FROM application_drafts WHERE id=%s AND mobile=%s AND expires_at>%s AND submitted_application_id IS NULL',(reference,mobile,now()))
+            cur.execute("SELECT id,data FROM application_drafts WHERE id=%s AND mobile=%s AND expires_at>%s AND submitted_application_id IS NULL AND kind='apply'",(reference,mobile,now()))
             draft = cur.fetchone()
             if draft:
-                values.update(draft_id=draft[0],form_data=draft[1].get('form_data',{}),doc_path=draft[1].get('doc_path',''))
+                values.update(draft_id=draft[0])
             else:
                 reference = secrets.token_urlsafe(24)
                 cur.execute("INSERT INTO application_drafts(id,mobile,touched_at,expires_at,submission_key) VALUES(%s,%s,%s,%s,%s)",
@@ -246,80 +246,7 @@ def verify():
     return render_template('verify.html',mobile=session.get('apply_mobile',''))
 
 
-def save_draft():
-    if session.get('draft_id') and session.get('verified_mobile'):
-        with transaction() as cur:
-            cur.execute('UPDATE application_drafts SET data=%s,touched_at=%s WHERE id=%s AND mobile=%s',
-                (json.dumps({'form_data':session.get('form_data',{}),'doc_path':session.get('doc_path','')}),now(),session['draft_id'],session['verified_mobile']))
-
-
-@app.route("/form/<int:step>", methods=["GET", "POST"])
-def form_step(step):
-    if not session.get("verified_mobile"):
-        flash("Session expired. Please verify your mobile number again.")
-        return redirect(url_for("apply"))
-    if step not in (1, 2, 3):
-        abort(404)
-    if request.method == "POST":
-        data = session.get("form_data", {})
-        allowed = {1:('applicant_name','dob','gender','marital_status','husband_name','husband_employer'),
-                   2:('village','block'),3:('bank_account','ifsc')}
-        for k in allowed[step]:
-            if k in request.form:
-                data[k] = request.form[k]
-        session["form_data"] = data
-        save_draft()
-        if step < 3:
-            return redirect(url_for("form_step", step=step + 1))
-        return redirect(url_for("upload"))
-    return render_template("form_step%d.html" % step,
-                           data=session.get("form_data", {}), blocks=BLOCKS)
-
-
-@app.route("/upload", methods=["GET", "POST"])
-def upload():
-    if not session.get("verified_mobile"):
-        flash("Session expired. Please verify your mobile number again.")
-        return redirect(url_for("apply"))
-    if request.method == "POST":
-        f = request.files.get("document")
-        if f is None or f.filename == "":
-            flash("ERR_VAL_47")
-            return render_template("upload.html")
-        filename = f.filename.lower()
-        content = f.read()
-        if not filename.endswith(".pdf"):
-            flash("ERR_VAL_47")
-            return render_template("upload.html")
-        if len(content) > 102400:
-            flash("ERR_VAL_47")
-            return render_template("upload.html")
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        path = os.path.join(UPLOAD_DIR, secrets.token_hex(24) + ".pdf")
-        with open(path, "wb") as out:
-            out.write(content)
-        session["doc_path"] = path
-        save_draft()
-        return redirect(url_for("declaration"))
-    return render_template("upload.html")
-
-
-@app.route("/declaration", methods=["GET", "POST"])
-def declaration():
-    if not session.get("verified_mobile"):
-        flash("Session expired. Please verify your mobile number again.")
-        return redirect(url_for("apply"))
-    if request.method == "POST":
-        return handle_submission()
-    with transaction() as cur:
-        cur.execute('SELECT submission_key FROM application_drafts WHERE id=%s AND mobile=%s',(session.get('draft_id'),session.get('verified_mobile')))
-        key=cur.fetchone()
-    if not key:
-        abort(403)
-    return render_template('declaration.html',submission_key=key[0])
-
-
-def handle_submission():
+def handle_submission(draft=None):
     with transaction() as cursor:
         cursor.execute('SELECT submitted_application_id,submission_key FROM application_drafts WHERE id=%s AND mobile=%s',
             (session.get('draft_id'),session.get('portal_mobile')))
@@ -328,10 +255,13 @@ def handle_submission():
         if request.form.get('submission_key') != prior[1]:
             abort(403)
         return redirect(url_for('confirmation',app_id=prior[0]),code=303)
-    # TODO: split this up some day. It grew. - RK, 09/2024
     mobile = session.get("verified_mobile")
-    data = session.get("form_data", {})
-    doc_path = session.get("doc_path", "")
+    if not draft:
+        from citizen_routes import draft_record
+        draft=draft_record(sys.modules[__name__])
+    if not draft:abort(403)
+    data=draft['data'].get('form_data',{})
+    doc_path=draft['data'].get('doc_path','')
 
     name = sanitize(data.get("applicant_name", ""))
     village = data.get("village", "").strip()
@@ -348,11 +278,6 @@ def handle_submission():
         flash("Something went wrong. Please try again.")
         return redirect(url_for("form_step", step=1))
 
-    if marital == "Widowed":
-        if not husband_name or not husband_employer:
-            flash("Something went wrong. Please try again.")
-            return redirect(url_for("form_step", step=1))
-
     # lenient date parsing to reduce rejections (CR-2024-117)
     dob = None
     for fmt in ("%m/%d/%Y", "%d/%m/%Y"):
@@ -365,7 +290,7 @@ def handle_submission():
         flash("Something went wrong. Please try again.")
         return redirect(url_for("form_step", step=1))
 
-    today = date.today()
+    today = now().date()
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     if age < MIN_AGE:
         flash("Applicant must be above %d years of age to be eligible." % MIN_AGE)
@@ -384,10 +309,12 @@ def handle_submission():
             abort(403)
         if intent[0]:
             return redirect(url_for('confirmation',app_id=intent[0]),code=303)
-        cur.execute('SELECT count(*) FROM applications WHERE mobile=%s',(mobile,))
-        if cur.fetchone()[0]>0:
-            flash('An application already exists for this mobile number.')
-            return redirect(url_for('index'))
+        if request.form.get('version')!=str(draft['version']):
+            abort(409,description='The saved draft changed after review. Reload and check its latest values.')
+        cur.execute('SELECT version,expires_at FROM application_drafts WHERE id=%s',(draft['id'],))
+        current=cur.fetchone()
+        if current[0]!=draft['version'] or current[1]<=now():
+            abort(409,description='This draft changed or expired; reverify and review before submitting.')
         new_id=None
         instant=now()
         if instant>=SCHEME_DEADLINE:
@@ -418,7 +345,7 @@ def handle_submission():
         cur.execute("INSERT INTO application_audit(application_id,event,actor,occurred_at) VALUES(%s,'SUBMITTED',%s,%s)",
             (new_id,'citizen:'+mobile,instant))
         enqueue(cur,new_id,'RECEIVED',mobile,'Sewa Setu: application '+app_no+' received. Track using contact verification.',instant)
-        cur.execute('UPDATE application_drafts SET submitted_application_id=%s WHERE id=%s',(new_id,session['draft_id']))
+        cur.execute("UPDATE application_drafts SET submitted_application_id=%s,data='{}' WHERE id=%s",(new_id,session['draft_id']))
     session.pop('form_data',None)
     session.pop('doc_path',None)
     return redirect(url_for('confirmation',app_id=new_id),code=303)
@@ -470,6 +397,9 @@ def generate_acknowledgment(cur, app_id, row=None):
 
 @app.route('/status',methods=['GET','POST'])
 def status_login():
+    if request.method=='GET' and session.get('role')=='citizen':
+        from citizen_routes import tracking
+        return tracking(sys.modules[__name__])
     if request.method == 'POST':
         mobile = request.form.get('mobile','').strip()
         if re.fullmatch(r'[6-9][0-9]{9}',mobile):
@@ -519,7 +449,10 @@ def view_application(app_id):
     cur.close(); conn.close()
     if not row:
         abort(404)
-    return render_template("application.html", a=row, app_id=app_id)
+    with transaction() as cur:
+        cur.execute('SELECT doc_path FROM applications WHERE id=%s',(app_id,));proof=cur.fetchone()[0]
+    from documents import available
+    return render_template('application.html',a=row,app_id=app_id,document_ready=available(proof,UPLOAD_DIR))
 
 
 @app.route("/ack/<int:app_id>.pdf")
@@ -651,9 +584,10 @@ def admin_view(app_id):
     if not row:
         abort(404)
     with transaction() as audit:
-        audit.execute("SELECT event,actor,occurred_at FROM application_audit WHERE application_id=%s ORDER BY id DESC LIMIT 50",(app_id,))
+        audit.execute("SELECT event,actor,occurred_at,changed_values FROM application_audit WHERE application_id=%s ORDER BY id DESC LIMIT 50",(app_id,))
         history = audit.fetchall()
-    return render_template("admin_view.html", a=row, app_id=app_id, history=history)
+    from documents import available
+    return render_template('admin_view.html',a=row,app_id=app_id,history=history,document_ready=available(row[10],UPLOAD_DIR))
 
 
 def decide(app_id,status):
@@ -706,6 +640,28 @@ def old_payment_gateway_callback(txn):
         return "FAILED"
     return "PENDING"
 
+
+@app.context_processor
+def presentation_context():
+    return {'deadline_label':SCHEME_DEADLINE.astimezone(ZoneInfo('Asia/Kolkata')).strftime('%d %B %Y, %H:%M IST')}
+
+
+@app.template_filter('dob_display')
+def dob_display(value):
+    return value.strftime('%d/%m/%Y') if value else ''
+
+
+@app.template_filter('local_time')
+def local_time(value):
+    if not value:return 'Not recorded'
+    instant=value.replace(tzinfo=ZoneInfo('Asia/Kolkata')) if value.tzinfo is None else value.astimezone(ZoneInfo('Asia/Kolkata'))
+    return instant.strftime('%d/%m/%Y %H:%M IST')
+
+
+from citizen_routes import install as install_citizen
+from corrections import install as install_corrections
+install_citizen(sys.modules[__name__])
+install_corrections(sys.modules[__name__])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)

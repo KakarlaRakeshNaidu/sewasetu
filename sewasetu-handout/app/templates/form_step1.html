@@ -1,32 +1,5 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="steps"><b>Step 2 of 6:</b> Personal Details</div>
-<h2>Personal Details</h2>
-<form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label>Full Name of Applicant (as per age proof document)</label>
-  <input type="text" name="applicant_name" value="{{ data.get('applicant_name','') }}">
-  <label>Date of Birth (DD/MM/YYYY)</label>
-  <input type="text" name="dob" placeholder="DD/MM/YYYY" value="{{ data.get('dob','') }}">
-  <label>Gender</label>
-  <select name="gender">
-    <option value="">--Select--</option>
-    <option {% if data.get('gender')=='Male' %}selected{% endif %}>Male</option>
-    <option {% if data.get('gender')=='Female' %}selected{% endif %}>Female</option>
-    <option {% if data.get('gender')=='Other' %}selected{% endif %}>Other</option>
-  </select>
-  <label>Marital Status</label>
-  <select name="marital_status">
-    <option value="">--Select--</option>
-    <option {% if data.get('marital_status')=='Married' %}selected{% endif %}>Married</option>
-    <option {% if data.get('marital_status')=='Unmarried' %}selected{% endif %}>Unmarried</option>
-    <option {% if data.get('marital_status')=='Widowed' %}selected{% endif %}>Widowed</option>
-  </select>
-  <label>Husband's Name</label>
-  <input type="text" name="husband_name" value="{{ data.get('husband_name','') }}">
-  <label>Husband's Current Employer</label>
-  <input type="text" name="husband_employer" value="{{ data.get('husband_employer','') }}">
-  <p class="note">Fields marked above are mandatory as applicable.</p>
-  <p><button class="btn" type="submit">Save &amp; Continue</button></p>
-</form>
-{% endblock %}
+{% extends 'base.html' %}{% import '_fields.html' as f with context %}{% block content %}{% include '_progress.html' %}<h2>Personal details</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><fieldset><legend>Personal details</legend>{{ f.input('applicant_name','Full name as on age proof',data,'Up to 100 characters. Use the name as on your age proof.',autocomplete='name') }}
+{{ f.input('dob','Date of birth',data,'DD/MM/YYYY, for example 04/12/1957 means 4 December 1957.',maximum=10,autocomplete='bday') }}
+{{ f.select('gender','Gender',data,['Male','Female','Other']) }}
+{{ f.select('marital_status','Marital status',data,['Married','Unmarried','Widowed']) }}
+{{ f.input('husband_name','Spouse name',data,'Optional. A deceased spouse employer is not required.',required=false) }}</fieldset><div class="actions"><button>Save and continue</button></div></form>{% endblock %}

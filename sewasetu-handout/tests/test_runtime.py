@@ -68,7 +68,7 @@ def test_concurrent_first_use_creates_one_shared_pool(database,monkeypatch):
         conn=db.connect()
         try:
             with conn.cursor() as cur:
-                cur.execute('SELECT1'.replace('SELECT1','SELECT 1'));assert cur.fetchone()==(1,)
+                cur.execute('SELECT 1');assert cur.fetchone()==(1,)
             conn.rollback()
         finally:conn.close()
     try:

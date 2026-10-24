@@ -92,6 +92,8 @@ def test_invalid_fields_have_linked_errors_and_retain_input(citizen,step,field,v
     assert response.status_code==422,'Invalid input advanced to another step'
     html=text(response)
     assert value in html and ('href="#'+field+'"') in html,'Field error lost its input or label target'
+    reloaded=text(client.get(f'/form/{step}'))
+    assert value in reloaded and ('href="#'+field+'"') in reloaded,'Reload lost saved invalid input or actionable errors'
 
 
 def test_back_navigation_retains_saved_values(citizen):
@@ -272,3 +274,46 @@ def test_correction_refreshes_receipt_without_reapplying(citizen):
     content=' '.join(page.extract_text() or '' for page in PdfReader(io.BytesIO(new.data)).pages)
     assert '000077778888' in content and '000012345678' not in content
     assert len(rows(ctx.database,ctx.mobile))==1
+
+
+def test_similar_person_warning_allows_a_distinct_adult_with_same_details(citizen):
+    ctx=citizen;first,ident,before=existing(ctx);ctx.clock.instant+=timedelta(seconds=61)
+    second=ctx.portal.app.test_client();data=prepare(second,ctx.mobile)
+    assert b'similar' in second.get('/declaration').data.lower() or b'already linked' in second.get('/declaration').data.lower()
+    response=second.post('/declaration',data=data)
+    assert response.status_code==422 and len(rows(ctx.database,ctx.mobile))==1
+    response=second.post('/declaration',data=data|{'duplicate_ack':'yes'},follow_redirects=True)
+    assert response.status_code==200 and len(rows(ctx.database,ctx.mobile))==2
+
+
+def test_pending_draft_can_resume_after_intake_closes_but_cannot_be_accepted(citizen):
+    from datetime import datetime
+    from submission_support import login
+    ctx=citizen;ctx.clock.instant=datetime.fromisoformat('2026-10-31T12:00:00+05:30')
+    first=ctx.portal.app.test_client();prepare(first,ctx.mobile,name='Synthetic Saved Closure')
+    ident=query(ctx,'SELECT id FROM application_drafts WHERE mobile=%s',(ctx.mobile,))[0][0]
+    ctx.clock.instant=datetime.fromisoformat('2026-11-01T00:00:01+05:30')
+    fresh=ctx.portal.app.test_client();login(fresh,ctx.mobile)
+    response=post_form(fresh,f'/draft/{ident}/resume',page='/status')
+    assert response.status_code in (302,303)
+    assert b'Synthetic Saved Closure' in fresh.get('/form/1').data
+    submit(fresh)
+    assert rows(ctx.database,ctx.mobile)==[]
+
+
+def test_replaced_accepted_document_is_retained_as_private_audit_evidence(citizen):
+    import io
+    from pathlib import Path
+    from conftest import ROOT,load_module
+    import os
+    ctx=citizen;client,ident,before=existing(ctx);ctx.clock.instant+=timedelta(seconds=61)
+    page=client.get(f'/application/{ident}/edit')
+    response=client.post(f'/application/{ident}/edit',data=form_fields(page)|{'document':(io.BytesIO(jpg_bytes()),'proof.jpg','image/jpeg')},follow_redirects=True)
+    assert response.status_code==200
+    review=prove_correction(ctx,client,ident,response)
+    assert confirm(client,ident,review).status_code in (302,303)
+    current=query(ctx,'SELECT doc_path FROM applications WHERE id=%s',(ident,))[0][0]
+    assert current!=before['doc_path'] and client.get(f'/document/{ident}').data.startswith(b'\xff\xd8')
+    old=time.time()-9*86400;os.utime(before['doc_path'],(old,old))
+    load_module('audit_proof_cleanup',ROOT/'app/scripts/cleanup.py').main()
+    assert Path(before['doc_path']).exists() and Path(current).exists(),'Accepted evidence was deleted after a correction'

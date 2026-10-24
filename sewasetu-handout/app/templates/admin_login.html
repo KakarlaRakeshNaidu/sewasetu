@@ -1,12 +1,1 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>Departmental Login</h2>
-<form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label>Username</label>
-  <input type="text" name="username">
-  <label>Password</label>
-  <input type="password" name="password">
-  <p><button class="btn" type="submit">Login</button></p>
-</form>
-{% endblock %}
+{% extends 'base.html' %}{% block content %}<h2>Staff sign in</h2><p>Use the privately configured staff account. Citizen contact verification does not grant staff access.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="username">Staff username</label><input id="username" type="text" name="username" autocomplete="username" required maxlength="50"><label for="password">Password</label><input id="password" type="password" name="password" autocomplete="current-password" required><div class="actions"><button>Sign in</button></div></form>{% endblock %}

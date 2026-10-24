@@ -1,0 +1,1 @@
+{% if errors %}<section class="error-summary" tabindex="-1" role="alert" aria-labelledby="error-heading"><h2 id="error-heading">Check these details</h2><ul>{% for field,message in errors.items() %}<li><a href="#{{ field }}">{{ message }}</a></li>{% endfor %}</ul></section>{% endif %}
