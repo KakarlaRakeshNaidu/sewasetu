@@ -32,6 +32,7 @@ table.tbl td,table.tbl th{border:1px solid #ccd;padding:7px 10px;font-size:14px;
   <div class="sub">Department of Social Welfare &middot; Government of Purvanchal</div>
 </div>
 <div class="band"></div>
+{% if session.get('role') %}<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Log out</button></form>{% endif %}
 <div class="container">
 {% with messages = get_flashed_messages() %}
   {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}

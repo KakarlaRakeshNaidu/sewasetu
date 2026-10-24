@@ -1,9 +1,3 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>Reset Password</h2>
-<form method="post">
-  <label>Registered Mobile Number</label>
-  <input type="text" name="mobile">
-  <p><button class="btn" type="submit">Reset Password</button></p>
-</form>
-{% endblock %}
+{% extends "base.html" %}{% block content %}
+<h2>Recover access</h2><p>Verify your existing contact with a one-time code. Recovery never resets your password to your date of birth.</p>
+<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="mobile">Mobile number</label><input id="mobile" name="mobile" maxlength="10" autocomplete="tel" required><button class="btn">Request verification</button></form>{% endblock %}

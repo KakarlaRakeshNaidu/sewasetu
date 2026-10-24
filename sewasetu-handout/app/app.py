@@ -11,6 +11,7 @@ import os
 import io
 import csv
 import random
+import re
 import hashlib
 import configparser
 from datetime import datetime, date, timedelta
@@ -23,46 +24,101 @@ from fpdf import FPDF
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-config = configparser.ConfigParser()
-config.read(os.path.join(BASE_DIR, "config", "app.ini"))
+# Shared settings are mandatory; inherited handout defaults are never loaded.
+import sys
+import secrets
+import hmac
+import json
+from contextlib import contextmanager
+from zoneinfo import ZoneInfo
+from flask import g
+from werkzeug.security import check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
+sys.path.insert(0, BASE_DIR)
+from runtime import settings, Database
+from access import install, issue, consume
 
+SETTINGS = settings()
 app = Flask(__name__)
-app.secret_key = config.get("app", "secret_key")
-app.config["PERMANENT_SESSION_LIFETIME"] = 300
+app.secret_key = SETTINGS['secret']
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=SETTINGS['secure'], MAX_CONTENT_LENGTH=6*1024*1024)
+# Only enable behind the single private trusted proxy configured by deployment.
+if os.environ.get('TRUST_PROXY') == '1':
+    app.wsgi_app = ProxyFix(app.wsgi_app,x_for=1,x_proto=1,x_host=1)
+ADMIN_USERNAME = SETTINGS['admin']
+SMS_GATEWAY_URL = os.environ.get('SMS_GATEWAY_URL','http://smsgw:8025').rstrip('/')
+OTP_VALIDITY_SECONDS = SETTINGS['otp_seconds']
+UPLOAD_DIR = os.environ.get('UPLOAD_DIR',os.path.join(BASE_DIR,'..','uploads'))
+SCHEME_DEADLINE = SETTINGS['deadline']
+MIN_AGE, SLA_DAYS = int(os.environ.get('MIN_AGE','60')), int(os.environ.get('SLA_DAYS','15'))
+BLOCKS = ['Sonari','Rajapara','Dhemaji Pathar','Borgaon','Namti','Khelua']
+_database = Database(SETTINGS)
 
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "sewasetu@123"
 
-SMS_GATEWAY_URL = config.get("app", "sms_gateway_url")
-OTP_VALIDITY_SECONDS = config.getint("app", "otp_validity_seconds")
-UPLOAD_DIR = config.get("app", "upload_dir")
-SCHEME_DEADLINE = datetime.strptime(config.get("pension", "scheme_deadline"),
-                                    "%Y-%m-%d %H:%M")
-MIN_AGE = config.getint("pension", "min_age")
-SLA_DAYS = config.getint("pension", "sla_days")
-
-BLOCKS = ["Sonari", "Rajapara", "Dhemaji Pathar", "Borgaon", "Namti", "Khelua"]
-
-import logging
-_logdir = "/var/log/sewasetu"
-try:
-    os.makedirs(_logdir, exist_ok=True)
-    _fh = logging.FileHandler(os.path.join(_logdir, "sewasetu-app.log"))
-    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s in app: %(message)s"))
-    app.logger.addHandler(_fh)
-    app.logger.setLevel(logging.INFO)
-except Exception:
-    pass
+def now():
+    return datetime.now(ZoneInfo('Asia/Kolkata'))
 
 
 def get_db():
-    return psycopg2.connect(
-        host=config.get("database", "host"),
-        port=config.get("database", "port"),
-        dbname=config.get("database", "name"),
-        user=config.get("database", "user"),
-        password=config.get("database", "password"),
-    )
+    return _database.connect()
+
+
+def open_db():
+    connection = get_db()
+    g.setdefault('database_connections',[]).append(connection)
+    return connection
+
+
+@app.teardown_request
+def release_connections(error):
+    for connection in g.pop('database_connections',[]):
+        try:
+            if not getattr(connection,'closed',True):
+                connection.rollback()
+        finally:
+            connection.close()
+
+
+@contextmanager
+def transaction():
+    connection = get_db()
+    try:
+        with connection.cursor() as cursor:
+            yield cursor
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+sessions = install(app,transaction,now,SETTINGS)
+
+
+from sqlalchemy.exc import TimeoutError as PoolTimeout, OperationalError as EngineUnavailable
+
+@app.errorhandler(psycopg2.Error)
+@app.errorhandler(PoolTimeout)
+@app.errorhandler(EngineUnavailable)
+def database_unavailable(error):
+    app.logger.warning('Database operation unavailable; transaction rolled back')
+    return 'Service temporarily unavailable. Please retry shortly or check existing application status.',503
+
+
+@app.before_request
+def staff_boundary():
+    if request.path.startswith('/admin/') and (session.get('role') != 'staff' or session.get('actor') != ADMIN_USERNAME):
+        if request.method == 'POST':
+            abort(403)
+        return redirect(url_for('admin_login'))
+
+
+@app.post('/logout')
+def logout():
+    sessions.rotate({})
+    return redirect(url_for('index'))
 
 
 def sanitize(value, maxlen=20):
@@ -81,17 +137,16 @@ def hash_password(p):
 
 def send_sms(mobile, text):
     try:
-        requests.post(SMS_GATEWAY_URL + "/api/send",
-                      json={"to": mobile, "text": text}, timeout=5)
-    except Exception as e:
-        app.logger.error("sms gateway error: %s" % e)
+        response = requests.post(SMS_GATEWAY_URL+'/api/send',json={'to':mobile,'text':text},timeout=5)
+        return response.status_code in (200,202)
+    except requests.RequestException:
+        app.logger.warning('SMS transport unavailable')
+        return False
 
 
 def deadline_remaining():
-    delta = SCHEME_DEADLINE - datetime.now()
-    if delta.total_seconds() <= 0:
-        return None
-    return int(delta.total_seconds() // 3600)
+    seconds = (SCHEME_DEADLINE-now()).total_seconds()
+    return None if seconds <= 0 else int(seconds//3600)
 
 
 def new_application_no():
@@ -115,9 +170,8 @@ def about():
 @app.route("/__gateway/", defaults={"subpath": ""})
 @app.route("/__gateway/<path:subpath>")
 def gateway_proxy(subpath):
-    # Convenience proxy to the internal SMS gateway, so the OTP inbox is reachable
-    # on the main site without opening a second port on the host. The gateway
-    # itself runs only on the internal network.
+    if subpath not in ('','api/messages'):
+        abort(404)
     try:
         r = requests.get(SMS_GATEWAY_URL + "/" + subpath,
                          params=request.args, timeout=5)
@@ -131,29 +185,23 @@ def gateway_proxy(subpath):
 # Application flow: mobile -> OTP -> form steps -> upload -> declaration
 # ---------------------------------------------------------------------------
 
-@app.route("/apply", methods=["GET", "POST"])
+@app.route('/apply',methods=['GET','POST'])
 def apply():
     if deadline_remaining() is None:
-        flash("The application window for this scheme has closed.")
-        return redirect(url_for("index"))
-    if request.method == "POST":
-        mobile = request.form.get("mobile", "").strip()
-        captcha = request.form.get("captcha", "")
-        if len(mobile) != 10 or not mobile.isdigit():
-            flash("Something went wrong. Please try again.")
-            return render_template("apply.html", captcha_q=make_captcha())
-        code = str(random.randint(100000, 999999))
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO otps (mobile, code, created_at) VALUES (%s, %s, %s)",
-                    (mobile, code, datetime.now()))
-        conn.commit()
-        cur.close(); conn.close()
-        send_sms(mobile, "Your Sewa Setu OTP is %s. Valid for 5 minutes." % code)
-        session.permanent = True
-        session["apply_mobile"] = mobile
-        return redirect(url_for("verify"))
-    return render_template("apply.html", captcha_q=make_captcha())
+        flash('The application window for this scheme has closed.')
+        return redirect(url_for('index'))
+    if request.method == 'POST':
+        mobile = request.form.get('mobile','').strip()
+        if not re.fullmatch(r'[6-9][0-9]{9}',mobile) or not isinstance(session.get('captcha_answer'),int) or request.form.get('captcha') != str(session.get('captcha_answer')):
+            flash('Enter a valid ten-digit mobile number and answer the addition question.')
+        else:
+            challenge = issue(transaction,now,SETTINGS,mobile,'apply',send_sms)
+            if challenge:
+                reference = session.get('draft_id') or session.get('resume_draft')
+                sessions.rotate({'challenge':challenge,'purpose':'apply','apply_mobile':mobile,'resume_draft':reference})
+                return redirect(url_for('verify'))
+            flash('A code was recently requested or delivery is unavailable. Please wait before retrying; your draft is saved.')
+    return render_template('apply.html',captcha_q=make_captcha())
 
 
 def make_captcha():
@@ -162,29 +210,46 @@ def make_captcha():
     return "%d + %d" % (a, b)
 
 
-@app.route("/verify", methods=["GET", "POST"])
-def verify():
-    mobile = session.get("apply_mobile")
+def verified_challenge(purpose):
+    mobile = consume(transaction,now,SETTINGS,session.get('challenge',''),purpose,request.form.get('otp','').strip())
     if not mobile:
-        return redirect(url_for("apply"))
-    if request.method == "POST":
-        code = request.form.get("otp", "").strip()
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT code, created_at FROM otps WHERE mobile = %s "
-                    "ORDER BY id DESC LIMIT 1", (mobile,))
-        row = cur.fetchone()
-        cur.close(); conn.close()
-        if row and row[0] == code:
-            age = (datetime.now() - row[1]).total_seconds()
-            if age > OTP_VALIDITY_SECONDS:
-                app.logger.warning("otp expired mobile=%s age=%ds" % (mobile, int(age)))
-                flash("OTP expired. Please request a new OTP.")
-                return redirect(url_for("apply"))
-            session["verified_mobile"] = mobile
-            return redirect(url_for("form_step", step=1))
-        flash("Invalid OTP.")
-    return render_template("verify.html", mobile=mobile)
+        flash('Code invalid, expired or already used. Request a new code; your draft is saved.')
+        return None
+    reference = session.get('resume_draft')
+    values = {'role':'citizen','logged_in':True,'portal_mobile':mobile}
+    if purpose == 'apply':
+        values['verified_mobile'] = mobile
+        with transaction() as cur:
+            cur.execute('SELECT id,data FROM application_drafts WHERE id=%s AND mobile=%s AND expires_at>%s',(reference,mobile,now()))
+            draft = cur.fetchone()
+            if draft:
+                values.update(draft_id=draft[0],form_data=draft[1].get('form_data',{}),doc_path=draft[1].get('doc_path',''))
+            else:
+                reference = secrets.token_urlsafe(24)
+                cur.execute("INSERT INTO application_drafts(id,mobile,touched_at,expires_at) VALUES(%s,%s,%s,%s)",
+                    (reference,mobile,now(),now()+timedelta(days=7)))
+                values['draft_id'] = reference
+    if purpose == 'recovery':
+        with transaction() as cur:
+            cur.execute("UPDATE web_sessions SET revoked=TRUE,data='{}' WHERE data->>'portal_mobile'=%s AND data->>'role'='citizen'",(mobile,))
+    sessions.rotate(values)
+    return mobile
+
+
+@app.route('/verify',methods=['GET','POST'])
+def verify():
+    if session.get('purpose') != 'apply':
+        return redirect(url_for('apply'))
+    if request.method == 'POST' and verified_challenge('apply'):
+        return redirect(url_for('form_step',step=1))
+    return render_template('verify.html',mobile=session.get('apply_mobile',''))
+
+
+def save_draft():
+    if session.get('draft_id') and session.get('verified_mobile'):
+        with transaction() as cur:
+            cur.execute('UPDATE application_drafts SET data=%s,touched_at=%s WHERE id=%s AND mobile=%s',
+                (json.dumps({'form_data':session.get('form_data',{}),'doc_path':session.get('doc_path','')}),now(),session['draft_id'],session['verified_mobile']))
 
 
 @app.route("/form/<int:step>", methods=["GET", "POST"])
@@ -196,9 +261,13 @@ def form_step(step):
         abort(404)
     if request.method == "POST":
         data = session.get("form_data", {})
-        for k, v in request.form.items():
-            data[k] = v
+        allowed = {1:('applicant_name','dob','gender','marital_status','husband_name','husband_employer'),
+                   2:('village','block'),3:('bank_account','ifsc')}
+        for k in allowed[step]:
+            if k in request.form:
+                data[k] = request.form[k]
         session["form_data"] = data
+        save_draft()
         if step < 3:
             return redirect(url_for("form_step", step=step + 1))
         return redirect(url_for("upload"))
@@ -225,10 +294,11 @@ def upload():
             flash("ERR_VAL_47")
             return render_template("upload.html")
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        path = os.path.join(UPLOAD_DIR, "%s_%s" % (session["verified_mobile"], filename))
+        path = os.path.join(UPLOAD_DIR, secrets.token_hex(24) + ".pdf")
         with open(path, "wb") as out:
             out.write(content)
         session["doc_path"] = path
+        save_draft()
         return redirect(url_for("declaration"))
     return render_template("upload.html")
 
@@ -287,11 +357,11 @@ def handle_submission():
         flash("Applicant must be above %d years of age to be eligible." % MIN_AGE)
         return redirect(url_for("form_step", step=1))
 
-    if datetime.now() > SCHEME_DEADLINE:
+    if now() >= SCHEME_DEADLINE:
         flash("The application deadline has passed.")
         return redirect(url_for("index"))
 
-    conn = get_db()
+    conn = open_db()
     cur = conn.cursor()
 
     cur.execute("SELECT count(*) FROM applications WHERE mobile = %s", (mobile,))
@@ -376,39 +446,49 @@ def generate_acknowledgment(cur, app_id):
 # Status portal (citizen login)
 # ---------------------------------------------------------------------------
 
-@app.route("/status", methods=["GET", "POST"])
+@app.route('/status',methods=['GET','POST'])
 def status_login():
-    if request.method == "POST":
-        mobile = request.form.get("mobile", "").strip()
-        password = request.form.get("password", "")
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT password_hash FROM portal_users WHERE mobile = %s", (mobile,))
+    if request.method == 'POST':
+        mobile = request.form.get('mobile','').strip()
+        if re.fullmatch(r'[6-9][0-9]{9}',mobile):
+            challenge = issue(transaction,now,SETTINGS,mobile,'status',send_sms)
+            if challenge:
+                sessions.rotate({'challenge':challenge,'purpose':'status','apply_mobile':mobile})
+                return redirect(url_for('status_verify'))
+        flash('If you can receive a code, request verification after the waiting period.')
+    return render_template('status_login.html')
+
+
+@app.route('/status/verify',methods=['GET','POST'])
+def status_verify():
+    if session.get('purpose') not in ('status','recovery'):
+        return redirect(url_for('status_login'))
+    if request.method == 'POST' and verified_challenge(session['purpose']):
+        with transaction() as cur:
+            cur.execute('SELECT id FROM applications WHERE mobile=%s ORDER BY submitted_at DESC,id DESC LIMIT 1',(session['portal_mobile'],))
+            row = cur.fetchone()
+        if row:
+            return redirect(url_for('view_application',app_id=row[0]))
+        flash('No application is associated with this verified contact.')
+        return redirect(url_for('status_login'))
+    return render_template('verify.html',mobile=session.get('apply_mobile',''))
+
+
+def authorize_record(app_id):
+    if session.get('role') not in ('citizen','staff'):
+        return False
+    with transaction() as cur:
+        cur.execute('SELECT mobile FROM applications WHERE id=%s',(app_id,))
         row = cur.fetchone()
-        cur.close(); conn.close()
-        if row and row[0] == hash_password(password):
-            session["logged_in"] = True
-            session["portal_mobile"] = mobile
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM applications WHERE mobile = %s "
-                        "ORDER BY submitted_at DESC LIMIT 1", (mobile,))
-            r = cur.fetchone()
-            cur.close(); conn.close()
-            if r:
-                return redirect(url_for("view_application", app_id=r[0]))
-            flash("No application found for this mobile number.")
-            return redirect(url_for("status_login"))
-        flash("Something went wrong. Please try again.")
-    return render_template("status_login.html")
+    return bool(row and ((session.get('role') == 'staff' and session.get('actor') == ADMIN_USERNAME) or (session.get('role') == 'citizen' and row[0] == session.get('portal_mobile'))))
 
 
 @app.route("/application/<int:app_id>")
 def view_application(app_id):
-    if not session.get("logged_in"):
+    if not authorize_record(app_id):
         flash("Please login to view application status.")
         return redirect(url_for("status_login"))
-    conn = get_db()
+    conn = open_db()
     cur = conn.cursor()
     cur.execute("SELECT application_no, applicant_name, mobile, dob, village, block, "
                 "bank_account, ifsc, status, submitted_at, decided_at "
@@ -422,9 +502,11 @@ def view_application(app_id):
 
 @app.route("/ack/<int:app_id>.pdf")
 def ack_pdf(app_id):
+    if not authorize_record(app_id):
+        abort(403)
     path = os.path.join(UPLOAD_DIR, "ack", "%d.pdf" % app_id)
     if not os.path.exists(path):
-        conn = get_db()
+        conn = open_db()
         cur = conn.cursor()
         cur.execute("SELECT id FROM applications WHERE id = %s", (app_id,))
         if not cur.fetchone():
@@ -436,28 +518,17 @@ def ack_pdf(app_id):
     return send_file(path, mimetype="application/pdf")
 
 
-@app.route("/status/reset", methods=["GET", "POST"])
+@app.route('/status/reset',methods=['GET','POST'])
 def reset_password():
-    if request.method == "POST":
-        mobile = request.form.get("mobile", "")
-        conn = get_db()
-        cur = conn.cursor()
-        # fetch account for reset
-        cur.execute("SELECT mobile FROM portal_users WHERE mobile = '%s'" % mobile)
-        row = cur.fetchone()
-        if row:
-            cur.execute("SELECT dob FROM applications WHERE mobile = '%s' LIMIT 1" % mobile)
-            r2 = cur.fetchone()
-            if r2:
-                newpass = r2[0].strftime("%d%m%Y")
-                cur.execute("UPDATE portal_users SET password_hash = %s WHERE mobile = %s",
-                            (hash_password(newpass), row[0]))
-                conn.commit()
-                send_sms(row[0], "Sewa Setu: your password has been reset to your "
-                                 "date of birth (DDMMYYYY).")
-        cur.close(); conn.close()
-        flash("If the mobile number exists, the password has been reset and sent by SMS.")
-    return render_template("reset.html")
+    if request.method == 'POST':
+        mobile = request.form.get('mobile','').strip()
+        if re.fullmatch(r'[6-9][0-9]{9}',mobile):
+            challenge = issue(transaction,now,SETTINGS,mobile,'recovery',send_sms)
+            if challenge:
+                sessions.rotate({'challenge':challenge,'purpose':'recovery','apply_mobile':mobile})
+                return redirect(url_for('status_verify'))
+        flash('If you can receive a code, use verification to recover access. Existing passwords are unchanged.')
+    return render_template('reset.html')
 
 
 # ---------------------------------------------------------------------------
@@ -468,9 +539,8 @@ def reset_password():
 def admin_login():
     if request.method == "POST":
         if (request.form.get("username") == ADMIN_USERNAME and
-                request.form.get("password") == ADMIN_PASSWORD):
-            session["logged_in"] = True
-            session["admin"] = True
+                check_password_hash(SETTINGS["admin_hash"], request.form.get("password", ""))):
+            sessions.rotate({"logged_in":True,"admin":True,"role":"staff","actor":ADMIN_USERNAME})
             return redirect(url_for("admin_dashboard"))
         flash("Invalid credentials.")
     return render_template("admin_login.html")
@@ -480,7 +550,7 @@ def admin_login():
 def admin_dashboard():
     if not session.get("admin"):
         return redirect(url_for("admin_login"))
-    conn = get_db()
+    conn = open_db()
     cur = conn.cursor()
     cur.execute("SELECT status, count(*) FROM applications GROUP BY status")
     by_status = cur.fetchall()
@@ -500,12 +570,15 @@ def admin_list():
     if not session.get("admin"):
         return redirect(url_for("admin_login"))
     status = request.args.get("status", "PENDING")
-    page = int(request.args.get("page", 1))
-    conn = get_db()
+    try:
+        page = min(10000,max(1,int(request.args.get("page",1))))
+    except ValueError:
+        abort(400)
+    conn = open_db()
     cur = conn.cursor()
     cur.execute("SELECT id, application_no, applicant_name, mobile, block, status, "
                 "submitted_at FROM applications WHERE status = %s "
-                "ORDER BY submitted_at ASC LIMIT 50 OFFSET %s",
+                "ORDER BY submitted_at ASC,id ASC LIMIT 50 OFFSET %s",
                 (status, (page - 1) * 50))
     rows = cur.fetchall()
     cur.close(); conn.close()
@@ -516,7 +589,7 @@ def admin_list():
 def admin_view(app_id):
     if not session.get("admin"):
         return redirect(url_for("admin_login"))
-    conn = get_db()
+    conn = open_db()
     cur = conn.cursor()
     cur.execute("SELECT application_no, applicant_name, mobile, dob, gender, "
                 "marital_status, village, block, bank_account, ifsc, doc_path, "
@@ -529,32 +602,29 @@ def admin_view(app_id):
     return render_template("admin_view.html", a=row, app_id=app_id)
 
 
-@app.route("/admin/approve/<int:app_id>", methods=["POST"])
+def decide(app_id,status):
+    if session.get('role') != 'staff':
+        abort(403)
+    instant = now()
+    with transaction() as cur:
+        cur.execute("UPDATE applications SET status=%s,decided_at=%s,decided_by=%s WHERE id=%s AND status='PENDING' RETURNING id",
+            (status,instant.replace(tzinfo=None),session['actor'],app_id))
+        if cur.fetchone():
+            cur.execute('INSERT INTO application_audit(application_id,event,actor,occurred_at) VALUES(%s,%s,%s,%s)',
+                (app_id,status,session['actor'],instant))
+        else:
+            flash('This application is already decided or unavailable.')
+    return redirect(url_for('admin_list'))
+
+
+@app.post('/admin/approve/<int:app_id>')
 def admin_approve(app_id):
-    if not session.get("logged_in"):
-        abort(403)
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = 'APPROVED', decided_at = %s "
-                "WHERE id = %s", (datetime.now(), app_id))
-    conn.commit()
-    cur.close(); conn.close()
-    flash("Application approved.")
-    return redirect(url_for("admin_list"))
+    return decide(app_id,'APPROVED')
 
 
-@app.route("/admin/reject/<int:app_id>", methods=["POST"])
+@app.post('/admin/reject/<int:app_id>')
 def admin_reject(app_id):
-    if not session.get("logged_in"):
-        abort(403)
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = 'REJECTED', decided_at = %s "
-                "WHERE id = %s", (datetime.now(), app_id))
-    conn.commit()
-    cur.close(); conn.close()
-    flash("Application rejected.")
-    return redirect(url_for("admin_list"))
+    return decide(app_id,'REJECTED')
 
 
 # ---------------------------------------------------------------------------

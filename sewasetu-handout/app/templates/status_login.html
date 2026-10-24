@@ -1,12 +1,5 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>Application Status Portal</h2>
-<form method="post">
-  <label>Mobile Number</label>
-  <input type="text" name="mobile" maxlength="10">
-  <label>Password</label>
-  <input type="password" name="password">
-  <p><button class="btn" type="submit">Login</button></p>
-</form>
-<p class="note"><a href="/status/reset">Forgot password?</a></p>
+{% extends "base.html" %}{% block content %}
+<h2>Track your applications</h2><p>Verify your mobile using a one-time code. Existing accounts and application numbers are retained.</p>
+<p>Anyone with access to a shared phone can view applications associated with that contact. The assessment gateway inbox is public and cannot provide real SMS confidentiality.</p>
+<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="mobile">Mobile number</label><input id="mobile" name="mobile" inputmode="numeric" autocomplete="tel" maxlength="10" required><button class="btn">Request code</button></form>
 {% endblock %}

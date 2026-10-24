@@ -217,3 +217,25 @@ def test_otp_contact_send_budget_spans_sessions_and_app_instances(security, monk
         application_challenge(security, app.test_client())
     sent = len(security.gateway.MESSAGES)
     assert sent <= 10, "Contact send budget was bypassed with fresh sessions/app instances"
+
+
+def test_verified_recovery_revokes_previous_citizen_sessions(security):
+    original = citizen_login(security)
+    recovery = security.portal.app.test_client()
+    security.clock.instant += timedelta(seconds=61)
+    response = post(recovery,'/status/reset',{'mobile':security.people[0]['mobile']})
+    assert response.status_code == 302
+    post(recovery,'/status/verify',{'otp':delivered_code(recovery,security.people[0]['mobile'])})
+    assert recovery.get(f"/application/{security.people[0]['id']}").status_code == 200
+    denied(original.get(f"/application/{security.people[0]['id']}"))
+
+
+def test_context_authentication_rotates_opaque_identifier(security):
+    client = security.portal.app.test_client()
+    client.get('/admin')
+    anonymous = cookie_value(client,security.portal)
+    staff_login(security,client)
+    assert cookie_value(client,security.portal) != anonymous
+    staff = cookie_value(client,security.portal)
+    citizen_login(security,client=client)
+    assert cookie_value(client,security.portal) != staff

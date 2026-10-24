@@ -1,6 +1,9 @@
 from contextlib import closing
 import importlib.util
 import sys
+import secrets
+from urllib.parse import quote
+from werkzeug.security import generate_password_hash
 import threading
 from datetime import date, datetime
 from pathlib import Path
@@ -25,6 +28,7 @@ def load_module(name, path):
 def database():
     with PostgresSandbox() as db:
         db.load(ROOT / "app/schema.sql")
+        db.load(ROOT / "app/migrations/001_access.sql")
         yield db
 
 
@@ -32,9 +36,16 @@ def database():
 def portal(database, monkeypatch, tmp_path):
     with closing(database.connect()) as conn, conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE applications, portal_users, otps RESTART IDENTITY")
+            cur.execute("TRUNCATE applications, portal_users, otps, web_sessions, portal_challenges, application_drafts, application_audit RESTART IDENTITY CASCADE")
+    values = dict(APP_ENV='test', PUBLIC_BASE_URL='http://localhost',
+        SECRET_KEY=secrets.token_hex(32),OTP_HMAC_KEY=secrets.token_hex(32),
+        DATABASE_URL='postgresql+psycopg2://sewasetu_test@/postgres?host='+quote(database.connection['host'],safe=''),
+        ADMIN_USERNAME='synthetic-staff',ADMIN_PASSWORD_HASH=generate_password_hash('Synthetic-Only-Staff-Password'),
+        SESSION_COOKIE_SECURE='false')
+    for key,value in values.items():
+        monkeypatch.setenv(key,value)
     module = load_module("baseline_portal", ROOT / "app/app.py")
-    module.app.config.update(TESTING=True, SECRET_KEY="synthetic-test-session-key")
+    module.app.config.update(TESTING=True)
     monkeypatch.setattr(module, "get_db", database.connect)
     monkeypatch.setattr(module, "UPLOAD_DIR", str(tmp_path / "uploads"))
 

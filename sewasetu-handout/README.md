@@ -2,7 +2,7 @@
 
 Inherited Flask/Jinja pension application, PostgreSQL database, scheduled deemed-approval job and simulated SMS gateway. Supported baseline journeys include application, receipt, status login and staff decisions.
 
-This is a local baseline, not a verified public release. Known authorization, recovery, eligibility and identity defects remain. Published inherited configuration values are exercise defaults; no real production secrets have been generated. Public deployment and security fixes are pending.
+This is a local baseline, not a verified public release. Known authorization, recovery, eligibility and identity defects remain. Runtime now requires private environment configuration and rejects inherited defaults. Public deployment and the remaining fixes are pending.
 
 ## Local baseline verification
 
@@ -54,6 +54,23 @@ Container builds, the full Compose topology, production configuration, migration
 
 ## Current limitations
 
-Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Authorization, secure legacy-account continuity, statutory scheduling, durable submission, uploads, pending corrections and faithful Indic identity require subsequent tested work. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
+Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Access protection and OTP-based legacy-account continuity are implemented and privately tested. Statutory scheduling, durable submission, inclusive uploads, pending corrections and faithful Indic identity remain pending. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
 
 Local planning/agent notes are excluded by the user's ignore policy. This omits agent configuration and prompt evidence required by BRIEF.md; regression tests remain trackable and are not omitted from the repository.
+
+## Access configuration and migrations
+
+Copy `.env.example` to a private operator environment and generate independent signing/OTP secrets and database passwords. Generate the staff password hash with Werkzeug `generate_password_hash`; keep the password and populated environment outside Git. There are no default working staff credentials. A production process requires an HTTPS public origin, secure cookies and a restricted PostgreSQL login. `TRUST_PROXY=1` is only for one trusted private reverse proxy.
+
+Use the separate database-owner environment for these commands; do not inject migration credentials into web workers:
+
+```sh
+.venv/bin/python app/manage.py migrate
+.venv/bin/python app/manage.py rotate-roles
+```
+
+`MIGRATION_DATABASE_URL` identifies the existing restored database. Migration runs additive versioned SQL under an advisory lock; it never loads seed data. Rotation requires independent `MIGRATION_DATABASE_PASSWORD` and `RUNTIME_DATABASE_PASSWORD` (at least 32 characters), actually changes the owner's password, and configures the restricted `portal_runtime` role. Update the private owner URL afterward; set web `DATABASE_URL` to the new runtime role. Existing volumes require this operator rotation: changing Compose variables alone does not rotate database passwords. Rotation was verified only on an owned disposable restored copy; an actual deployment still needs its own run and verification.
+
+Citizen tracking and recovery use delivered purpose-bound OTPs, including inherited accounts; original account hashes remain unchanged. A verified contact can access associated applications. Shared-phone users share contact access. The public assessment gateway exposes OTPs and provides no real SMS confidentiality. Logout revokes server-side sessions; recovery revokes previous citizen sessions. Staff and citizen authentication rotate opaque cookie identifiers. All form POSTs require CSRF tokens. Session idle/absolute limits are 30 minutes/two hours; OTP lifetime is five minutes. Staff role and citizen ownership are checked before receipt cache access.
+
+The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience, final upload/form design, Unicode receipts, operations and public verification are still pending.

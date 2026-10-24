@@ -163,7 +163,7 @@ def security(database, monkeypatch, tmp_path):
         monkeypatch.setenv(name, value)
     with closing(database.connect()) as conn, conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE applications, portal_users, otps RESTART IDENTITY")
+            cur.execute("TRUNCATE applications, portal_users, otps, web_sessions, portal_challenges, application_drafts, application_audit RESTART IDENTITY CASCADE")
     module = load_module("security_portal", ROOT / "app/app.py")
     module.app.config["TESTING"] = True
     # Leave runtime signing/admin secrets intact so default-secret tests detect real behavior.

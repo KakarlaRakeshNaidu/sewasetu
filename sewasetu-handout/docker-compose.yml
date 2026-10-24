@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: sewasetu
       POSTGRES_USER: sewasetu
-      POSTGRES_PASSWORD: sewasetu123
+      POSTGRES_PASSWORD: ${MIGRATION_DATABASE_PASSWORD:?Set a new private owner password}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./app/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
@@ -12,8 +12,20 @@ services:
 
   app:
     build: ./app
+    environment: &runtime_env
+      APP_ENV: production
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set HTTPS public origin}
+      SECRET_KEY: ${SECRET_KEY:?Generate signing secret}
+      OTP_HMAC_KEY: ${OTP_HMAC_KEY:?Generate separate OTP secret}
+      DATABASE_URL: ${DATABASE_URL:?Set restricted runtime role URL}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?Set new staff username}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?Set modern staff password hash}
+      SMS_GATEWAY_URL: http://smsgw:8025
+      UPLOAD_DIR: /var/sewasetu/uploads
+      SESSION_COOKIE_SECURE: 'true'
+      SCHEME_DEADLINE: ${SCHEME_DEADLINE:-2026-11-01T00:00:00+05:30}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       - db
       - smsgw
@@ -23,6 +35,8 @@ services:
 
   scheduler:
     build: ./app
+    environment: *runtime_env
+    profiles: [scheduler]
     command: ["cron", "-f"]
     depends_on:
       - db
@@ -31,7 +45,7 @@ services:
 
   smsgw:
     build: ./smsgw
-    # internal only — reached by the app over the docker network and exposed to
+    # internal only â€” reached by the app over the docker network and exposed to
     # users via the app at /__gateway/ (so no second host port is needed)
     expose:
       - "8025"
