@@ -239,3 +239,25 @@ def test_context_authentication_rotates_opaque_identifier(security):
     staff = cookie_value(client,security.portal)
     citizen_login(security,client=client)
     assert cookie_value(client,security.portal) != staff
+
+
+def test_static_response_does_not_rewrite_authenticated_cookie(security):
+    client=staff_login(security)
+    response=client.get('/static/intentionally-missing-session-test.css')
+    assert response.status_code==404
+    assert 'Set-Cookie' not in response.headers,'Static response can overwrite a newer authentication cookie'
+
+
+def test_stale_session_response_cannot_delete_new_authenticated_cookie(security):
+    app=security.portal.app;client=app.test_client();client.get('/admin')
+    name=app.config.get('SESSION_COOKIE_NAME','session')
+    previous=cookie_value(client,security.portal)
+    with app.test_request_context('/',headers={'Cookie':name+'='+previous}):
+        stale=app.session_interface.open_session(app,__import__('flask').request)
+    staff_login(security,client)
+    assert cookie_value(client,security.portal)!=previous
+    with app.test_request_context('/',headers={'Cookie':name+'='+previous}):
+        response=app.response_class('Earlier in-flight response')
+        app.session_interface.save_session(app,stale,response)
+    assert 'Set-Cookie' not in response.headers,'A stale revoked-session response deletes the newly authenticated cookie'
+    assert client.get('/admin/dashboard').status_code==200
