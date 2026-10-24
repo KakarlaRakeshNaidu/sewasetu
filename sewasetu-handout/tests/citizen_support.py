@@ -22,7 +22,7 @@ def citizen(portal,gateway,database,monkeypatch):
             return clock.instant.astimezone(tz) if tz else clock.instant.astimezone(clock.server_zone).replace(tzinfo=None)
     class Day(date):
         @classmethod
-        def today(cls):return clock.instant.date()
+        def today(cls):return clock.instant.astimezone(clock.server_zone).date()
     monkeypatch.setattr(portal,'datetime',Clock)
     monkeypatch.setattr(portal,'date',Day)
     return SimpleNamespace(portal=portal,gateway=gateway,database=database,clock=clock,mobile='9300000000')

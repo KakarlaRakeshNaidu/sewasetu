@@ -117,3 +117,11 @@ def test_historic_synthetic_identity_and_legacy_account_stay_exact(citizen):
     assert legacy.get(f'/application/{ident}').status_code==200
     assert query(ctx,'SELECT to_jsonb(a) FROM applications a WHERE id=%s',(ident,))[0][0]==before,'Historic identity was guessed or rewritten'
     assert query(ctx,'SELECT password_hash FROM portal_users WHERE mobile=%s',('9400000000',))==[(password_hash,)]
+
+
+def test_sixtieth_birthday_uses_ist_date_just_after_midnight_on_utc_host(citizen):
+    ctx=citizen;ctx.clock.instant=datetime.fromisoformat('2026-10-31T00:00:01+05:30')
+    ctx.clock.server_zone=ZoneInfo('UTC')
+    client=ctx.portal.app.test_client();prepare(client,ctx.mobile)
+    set_identity(client,'Synthetic Midnight Birthday','31/10/1966');submit(client)
+    assert len(rows(ctx.database,ctx.mobile))==1,'UTC server date excluded an applicant already60 in IST'
