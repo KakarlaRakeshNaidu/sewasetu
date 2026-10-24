@@ -122,14 +122,12 @@ def logout():
     return redirect(url_for('index'))
 
 
-def sanitize(value, maxlen=20):
-    # Trim input to safe length for downstream systems (NIC mandate 2019:
-    # legacy disbursement interface accepts fixed-width fields).
-    if value is None:
-        return ""
-    value = value.strip()
-    encoded = value.encode("utf-8")[:maxlen]
-    return encoded.decode("utf-8", errors="ignore")
+def sanitize(value, maxlen=100):
+    # Accepted text is preserved exactly; the shared form schema rejects excess.
+    value = value or ''
+    if len(value)>maxlen:
+        raise ValueError('Use at most %d characters; nothing is cut automatically.' % maxlen)
+    return value
 
 
 def hash_password(p):
@@ -278,17 +276,12 @@ def handle_submission(draft=None):
         flash("Something went wrong. Please try again.")
         return redirect(url_for("form_step", step=1))
 
-    # lenient date parsing to reduce rejections (CR-2024-117)
-    dob = None
-    for fmt in ("%m/%d/%Y", "%d/%m/%Y"):
-        try:
-            dob = datetime.strptime(dob_raw, fmt).date()
-            break
-        except ValueError:
-            continue
-    if dob is None:
-        flash("Something went wrong. Please try again.")
-        return redirect(url_for("form_step", step=1))
+    from forms import parse_dob
+    try:
+        dob = parse_dob(dob_raw)
+    except ValueError as error:
+        flash(str(error))
+        return redirect(url_for('form_step',step=1))
 
     today = now().date()
     age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
@@ -356,39 +349,17 @@ def confirmation(app_id):
     if not authorize_record(app_id):
         abort(403)
     with transaction() as cur:
-        cur.execute('SELECT application_no FROM applications WHERE id=%s',(app_id,))
-        number=cur.fetchone()[0]
-    return render_template('confirmation.html',app_no=number,app_id=app_id)
+        cur.execute('SELECT application_no,applicant_name,dob,bank_account FROM applications WHERE id=%s',(app_id,))
+        accepted=cur.fetchone()
+    return render_template('confirmation.html',app_no=accepted[0],app_id=app_id,accepted=accepted)
 
 
 def generate_acknowledgment(cur, app_id, row=None):
     if row is None:
         cur.execute('SELECT application_no,applicant_name,mobile,dob,village,block,bank_account,ifsc,submitted_at,status FROM applications WHERE id=%s',(app_id,))
         row=cur.fetchone()
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 10, "GOVERNMENT OF PURVANCHAL", ln=1, align="C")
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 8, "Department of Social Welfare", ln=1, align="C")
-    pdf.cell(0, 8, "Old Age Pension Scheme - Acknowledgment", ln=1, align="C")
-    pdf.ln(4)
-    pdf.line(10,12,200,12)
-    pdf.line(10,282,200,282)
-    labels = ["Application No", "Applicant Name", "Mobile", "Date of Birth",
-              "Village", "Block", "Bank Account", "IFSC", "Submitted At", "Status"]
-    pdf.set_font("Helvetica", "", 10)
-    for label, val in zip(labels, row):
-        try:
-            pdf.cell(60, 8, label, border=1)
-            pdf.cell(0, 8, str(val), border=1, ln=1)
-        except Exception:
-            pdf.cell(0, 8, "?", border=1, ln=1)
-    pdf.ln(6)
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.multi_cell(0, 5, "This is a computer generated acknowledgment. Processing SLA "
-                         "as per the Purvanchal Right to Public Services Act applies.")
-    return bytes(pdf.output())
+    from receipts import render_receipt
+    return render_receipt(row)
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +441,7 @@ def ack_pdf(app_id):
     directory=Path(UPLOAD_DIR)/'ack'
     directory.mkdir(mode=0o700,parents=True,exist_ok=True)
     fingerprint=hashlib.sha256(json.dumps(row,default=str,ensure_ascii=False).encode()).hexdigest()[:20]
-    path=directory/(str(app_id)+'-v'+str(row[-1])+'-'+fingerprint+'-r1.pdf')
+    path=directory/(str(app_id)+'-v'+str(row[-1])+'-'+fingerprint+'-r2.pdf')
     with open(directory/(str(app_id)+'.lock'),'a+b') as lock:
         deadline=time.monotonic()+2
         while True:
@@ -648,7 +619,9 @@ def presentation_context():
 
 @app.template_filter('dob_display')
 def dob_display(value):
-    return value.strftime('%d/%m/%Y') if value else ''
+    if not value:return ''
+    if isinstance(value,str):value=date.fromisoformat(value)
+    return value.strftime('%d/%m/%Y')
 
 
 @app.template_filter('local_time')
