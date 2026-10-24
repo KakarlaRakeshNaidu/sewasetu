@@ -1,0 +1,62 @@
+{
+  "source_window": "2026-04-29T18:45:00+05:30",
+  "all_source_requests": 159,
+  "selection": "Only POST /declaration and GET /application/<id>; identifiers/bodies omitted",
+  "duration_seconds": 60,
+  "compression": 12,
+  "burst_retry_fanout": 4,
+  "events": [
+    {
+      "at": 1,
+      "kind": "detail"
+    },
+    {
+      "at": 6,
+      "kind": "detail"
+    },
+    {
+      "at": 16,
+      "kind": "detail"
+    },
+    {
+      "at": 16,
+      "kind": "submit"
+    },
+    {
+      "at": 31,
+      "kind": "detail"
+    },
+    {
+      "at": 34,
+      "kind": "detail"
+    },
+    {
+      "at": 41,
+      "kind": "detail"
+    },
+    {
+      "at": 42,
+      "kind": "submit"
+    },
+    {
+      "at": 43,
+      "kind": "submit"
+    },
+    {
+      "at": 45,
+      "kind": "submit"
+    },
+    {
+      "at": 50,
+      "kind": "detail"
+    },
+    {
+      "at": 51,
+      "kind": "detail"
+    },
+    {
+      "at": 57,
+      "kind": "submit"
+    }
+  ]
+}

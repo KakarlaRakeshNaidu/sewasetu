@@ -32,6 +32,20 @@ It compares every application's and account's PostgreSQL COPY fields against the
 
 The seed, log archives and briefing audio are supplied privately, not recreated or downloaded. Never replay the seed over a nonempty database, run the scheduler during baseline measurement, or delete an inherited database volume.
 
+## Controlled submission replay
+
+Run only on the privately supplied input with the PostgreSQL 15/Python 3.11 setup above:
+
+```sh
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/replay_submission.py \
+  --seed seed/seed.sql \
+  --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
+```
+
+The command owns a new temporary restored cluster, a four-worker loopback Gunicorn instance and a local SMS fixture; it accepts no external target URL and starts no scheduler. Synthetic applicants complete the actual captcha/OTP/form/upload routes. All 100,002 original applications/accounts are reconciled before and after; only synthetic records are added to the disposable copy. Tools are ordinary development dependencies, not extra production services.
+
+The identifier-free scenario retains 13 submission/detail events from a 159-request minute. Each phase compresses the 60-second shape by 12; the middle phase adds four concurrent retries per event. This is a controlled subset/stress replay, not the complete production workload or a capacity claim. Authentication/preparation time is reported separately. Output contains latency/completion/error/connection/resource aggregates and redacted query-plan shapes; correctness failures cause exit 1 independently of timing. The uncorrected portal is expected to fail. Stop its owned processes and remove only their temporary directories on interruption; never delete an inherited volume.
+
 ## Supplied Compose topology
 
 The supplied docker-compose.yml defines app, PostgreSQL 15, gateway and scheduler services. App runtime uses app/config/app.ini; the gateway's internal port is 8025 and its console/inbox are proxied through /__gateway/ on the app. No additional gateway port needs public exposure. Inherited admin/status entry points are /admin and /status.
