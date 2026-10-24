@@ -221,14 +221,14 @@ def verified_challenge(purpose):
     if purpose == 'apply':
         values['verified_mobile'] = mobile
         with transaction() as cur:
-            cur.execute('SELECT id,data FROM application_drafts WHERE id=%s AND mobile=%s AND expires_at>%s',(reference,mobile,now()))
+            cur.execute('SELECT id,data FROM application_drafts WHERE id=%s AND mobile=%s AND expires_at>%s AND submitted_application_id IS NULL',(reference,mobile,now()))
             draft = cur.fetchone()
             if draft:
                 values.update(draft_id=draft[0],form_data=draft[1].get('form_data',{}),doc_path=draft[1].get('doc_path',''))
             else:
                 reference = secrets.token_urlsafe(24)
-                cur.execute("INSERT INTO application_drafts(id,mobile,touched_at,expires_at) VALUES(%s,%s,%s,%s)",
-                    (reference,mobile,now(),now()+timedelta(days=7)))
+                cur.execute("INSERT INTO application_drafts(id,mobile,touched_at,expires_at,submission_key) VALUES(%s,%s,%s,%s,%s)",
+                    (reference,mobile,now(),now()+timedelta(days=7),reference))
                 values['draft_id'] = reference
     if purpose == 'recovery':
         with transaction() as cur:
@@ -311,10 +311,23 @@ def declaration():
         return redirect(url_for("apply"))
     if request.method == "POST":
         return handle_submission()
-    return render_template("declaration.html")
+    with transaction() as cur:
+        cur.execute('SELECT submission_key FROM application_drafts WHERE id=%s AND mobile=%s',(session.get('draft_id'),session.get('verified_mobile')))
+        key=cur.fetchone()
+    if not key:
+        abort(403)
+    return render_template('declaration.html',submission_key=key[0])
 
 
 def handle_submission():
+    with transaction() as cursor:
+        cursor.execute('SELECT submitted_application_id,submission_key FROM application_drafts WHERE id=%s AND mobile=%s',
+            (session.get('draft_id'),session.get('portal_mobile')))
+        prior=cursor.fetchone()
+    if prior and prior[0]:
+        if request.form.get('submission_key') != prior[1]:
+            abort(403)
+        return redirect(url_for('confirmation',app_id=prior[0]),code=303)
     # TODO: split this up some day. It grew. - RK, 09/2024
     mobile = session.get("verified_mobile")
     data = session.get("form_data", {})
@@ -362,58 +375,69 @@ def handle_submission():
         flash("The application deadline has passed.")
         return redirect(url_for("index"))
 
-    conn = open_db()
-    cur = conn.cursor()
+    # Lock the owned intent before allocating any application/account/notification work.
+    with transaction() as cur:
+        cur.execute('SELECT submitted_application_id,submission_key FROM application_drafts WHERE id=%s AND mobile=%s FOR UPDATE',
+            (session.get('draft_id'),mobile))
+        intent=cur.fetchone()
+        if not intent or request.form.get('submission_key') != intent[1]:
+            abort(403)
+        if intent[0]:
+            return redirect(url_for('confirmation',app_id=intent[0]),code=303)
+        cur.execute('SELECT count(*) FROM applications WHERE mobile=%s',(mobile,))
+        if cur.fetchone()[0]>0:
+            flash('An application already exists for this mobile number.')
+            return redirect(url_for('index'))
+        new_id=None
+        instant=now()
+        if instant>=SCHEME_DEADLINE:
+            flash('The application deadline has passed. Existing applications remain available.')
+            return redirect(url_for('index'))
+        for _ in range(8):
+            app_no=new_application_no()
+            cur.execute('SAVEPOINT number_attempt')
+            try:
+                cur.execute("""INSERT INTO applications
+                  (application_no,applicant_name,mobile,dob,gender,marital_status,husband_name,husband_employer,
+                   village,block,bank_account,ifsc,doc_path,status,submitted_at)
+                  VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s) RETURNING id""",
+                  (app_no,name,mobile,dob,gender,marital,husband_name,husband_employer,village,block,bank_account,ifsc,doc_path,instant.replace(tzinfo=None)))
+                new_id=cur.fetchone()[0]
+            except psycopg2.errors.UniqueViolation as error:
+                cur.execute('ROLLBACK TO SAVEPOINT number_attempt')
+                if error.diag.constraint_name != 'applications_number_unique':
+                    raise
+            cur.execute('RELEASE SAVEPOINT number_attempt')
+            if new_id:
+                break
+        if not new_id:
+            abort(503)
+        # OTP is the access credential; existing account hashes are never overwritten.
+        cur.execute('INSERT INTO portal_users(mobile,password_hash) VALUES(%s,%s) ON CONFLICT(mobile) DO NOTHING',
+            (mobile,'!OTP_ONLY'))
+        cur.execute("INSERT INTO application_audit(application_id,event,actor,occurred_at) VALUES(%s,'SUBMITTED',%s,%s)",
+            (new_id,'citizen:'+mobile,instant))
+        enqueue(cur,new_id,'RECEIVED',mobile,'Sewa Setu: application '+app_no+' received. Track using contact verification.',instant)
+        cur.execute('UPDATE application_drafts SET submitted_application_id=%s WHERE id=%s',(new_id,session['draft_id']))
+    session.pop('form_data',None)
+    session.pop('doc_path',None)
+    return redirect(url_for('confirmation',app_id=new_id),code=303)
 
-    cur.execute("SELECT count(*) FROM applications WHERE mobile = %s", (mobile,))
-    if cur.fetchone()[0] > 0:
-        cur.close(); conn.close()
-        flash("An application already exists for this mobile number. "
-              "Duplicate applications are not permitted.")
-        return redirect(url_for("index"))
 
-    app_no = new_application_no()
-    cur.execute(
-        """INSERT INTO applications
-           (application_no, applicant_name, mobile, dob, gender, marital_status,
-            husband_name, husband_employer, village, block, bank_account, ifsc,
-            doc_path, status, submitted_at)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s)
-           RETURNING id""",
-        (app_no, name, mobile, dob, gender, marital, husband_name,
-         husband_employer, village, block, bank_account, ifsc, doc_path,
-         datetime.now()))
-    new_id = cur.fetchone()[0]
-
-    # status portal account; password is DOB as DDMMYYYY per dept. circular
-    portal_pass = dob.strftime("%d%m%Y")
-    cur.execute("SELECT count(*) FROM portal_users WHERE mobile = %s", (mobile,))
-    if cur.fetchone()[0] == 0:
-        cur.execute("INSERT INTO portal_users (mobile, password_hash) VALUES (%s,%s)",
-                    (mobile, hash_password(portal_pass)))
-    conn.commit()
-
-    app.logger.info("generating acknowledgment pdf application=%d" % new_id)
-    pdf_bytes = generate_acknowledgment(cur, new_id)
-    ack_dir = os.path.join(UPLOAD_DIR, "ack")
-    os.makedirs(ack_dir, exist_ok=True)
-    with open(os.path.join(ack_dir, "%d.pdf" % new_id), "wb") as out:
-        out.write(pdf_bytes)
-
-    cur.close(); conn.close()
-    session.pop("form_data", None)
-    session.pop("doc_path", None)
-    session.pop("verified_mobile", None)
-    send_sms(mobile, "Sewa Setu: application %s received. Track at the status portal "
-                     "with mobile no. and password (DOB as DDMMYYYY)." % app_no)
-    return render_template("confirmation.html", app_no=app_no, app_id=new_id)
+@app.get('/confirmation/<int:app_id>')
+def confirmation(app_id):
+    if not authorize_record(app_id):
+        abort(403)
+    with transaction() as cur:
+        cur.execute('SELECT application_no FROM applications WHERE id=%s',(app_id,))
+        number=cur.fetchone()[0]
+    return render_template('confirmation.html',app_no=number,app_id=app_id)
 
 
-def generate_acknowledgment(cur, app_id):
-    cur.execute("SELECT application_no, applicant_name, mobile, dob, village, block, "
-                "bank_account, ifsc, submitted_at, status FROM applications WHERE id = %s",
-                (app_id,))
-    row = cur.fetchone()
+def generate_acknowledgment(cur, app_id, row=None):
+    if row is None:
+        cur.execute('SELECT application_no,applicant_name,mobile,dob,village,block,bank_account,ifsc,submitted_at,status FROM applications WHERE id=%s',(app_id,))
+        row=cur.fetchone()
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 14)
@@ -422,11 +446,8 @@ def generate_acknowledgment(cur, app_id):
     pdf.cell(0, 8, "Department of Social Welfare", ln=1, align="C")
     pdf.cell(0, 8, "Old Age Pension Scheme - Acknowledgment", ln=1, align="C")
     pdf.ln(4)
-    # decorative border, as per approved letterhead design
-    for i in range(0, 2000):
-        x = 10 + (i % 190)
-        pdf.line(x, 282, x + 0.5, 282)
-        pdf.line(x, 12, x + 0.5, 12)
+    pdf.line(10,12,200,12)
+    pdf.line(10,282,200,282)
     labels = ["Application No", "Applicant Name", "Mobile", "Date of Birth",
               "Village", "Block", "Bank Account", "IFSC", "Submitted At", "Status"]
     pdf.set_font("Helvetica", "", 10)
@@ -505,18 +526,45 @@ def view_application(app_id):
 def ack_pdf(app_id):
     if not authorize_record(app_id):
         abort(403)
-    path = os.path.join(UPLOAD_DIR, "ack", "%d.pdf" % app_id)
-    if not os.path.exists(path):
-        conn = open_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM applications WHERE id = %s", (app_id,))
-        if not cur.fetchone():
-            cur.close(); conn.close()
-            abort(404)
-        data = generate_acknowledgment(cur, app_id)
-        cur.close(); conn.close()
-        return send_file(io.BytesIO(data), mimetype="application/pdf")
-    return send_file(path, mimetype="application/pdf")
+    # Snapshot data, then return the connection before filesystem locks or PDF rendering.
+    with transaction() as cur:
+        cur.execute('SELECT application_no,applicant_name,mobile,dob,village,block,bank_account,ifsc,submitted_at,status,receipt_version FROM applications WHERE id=%s',(app_id,))
+        row=cur.fetchone()
+    import fcntl
+    import tempfile
+    import time
+    from pathlib import Path
+    directory=Path(UPLOAD_DIR)/'ack'
+    directory.mkdir(mode=0o700,parents=True,exist_ok=True)
+    fingerprint=hashlib.sha256(json.dumps(row,default=str,ensure_ascii=False).encode()).hexdigest()[:20]
+    path=directory/(str(app_id)+'-v'+str(row[-1])+'-'+fingerprint+'-r1.pdf')
+    with open(directory/(str(app_id)+'.lock'),'a+b') as lock:
+        deadline=time.monotonic()+2
+        while True:
+            try:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic()>=deadline:
+                    abort(503)
+                time.sleep(.02)
+        if not path.exists():
+            try:
+                data=generate_acknowledgment(None,app_id,row=row[:-1])
+            except Exception as error:
+                app.logger.warning('Receipt generation unavailable: %s',type(error).__name__)
+                abort(503)
+            if len(data)>1024*1024:
+                abort(503)
+            descriptor,temporary=tempfile.mkstemp(dir=directory,prefix='receipt-')
+            try:
+                with os.fdopen(descriptor,'wb') as output:
+                    output.write(data);output.flush();os.fsync(output.fileno())
+                os.replace(temporary,path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+    return send_file(path,mimetype='application/pdf',conditional=False)
 
 
 @app.route('/status/reset',methods=['GET','POST'])

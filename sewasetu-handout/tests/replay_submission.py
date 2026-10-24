@@ -189,6 +189,8 @@ def main():
         work = Path(private)
         db.load(ROOT / "app/schema.sql")
         db.load(args.seed.resolve())
+        for migration in sorted((ROOT/"app/migrations").glob("*.sql")):
+            db.load(migration)
         original = reconcile(db, source)
         assert original["applications"]["rows"] == 100002
         query(db, "ANALYZE applications,portal_users,otps")
@@ -221,7 +223,7 @@ def main():
             DATABASE_URL="postgresql+psycopg2://sewasetu_test@/postgres?host="+quote(str(db.socket), safe=""),
             SMS_GATEWAY_URL=f"http://127.0.0.1:{server.server_port}", UPLOAD_DIR=str(work/"uploads"),
             REPLAY_PG_SOCKET=str(db.socket), REPLAY_SMS_URL=f"http://127.0.0.1:{server.server_port}",
-            REPLAY_UPLOAD_DIR=str(work/"uploads"), REPLAY_SECRET=secret)
+            REPLAY_UPLOAD_DIR=str(work/"uploads"), REPLAY_SECRET=secret, REPLAY_CLOCK_EPOCH=str(time.time()))
         environment.pop("GUNICORN_CMD_ARGS", None)
         log = (work / "server.log").open("w+")
         master = subprocess.Popen([str(Path(sys.executable).parent / "gunicorn"), "--chdir", str(ROOT / "tests"),
@@ -250,8 +252,6 @@ def main():
             tracker_row = rows(db, tracker_mobile)
             assert len(tracker_row) == 1 and accepted(response, tracker_row[0][1])
             tracker_id = tracker_row[0][0]
-            login(tracker, tracker_mobile)
-            assert tracker.get(f"/application/{tracker_id}").status_code == 200
             phase_tasks = []
             for name, fanout in [("baseline", 1), ("burst-retries", scenario["burst_retry_fanout"]), ("recovery", 1)]:
                 tasks = {}
@@ -262,6 +262,17 @@ def main():
                         templates.append(browser)
                         tasks[index] = (browser, prepare(browser, mobile), mobile)
                 phase_tasks.append((name, fanout, tasks))
+            # A fresh tracking browser must complete its own current OTP, not inherit apply authorization.
+            # Respect the real contact send cooldown; this wait is preparation, outside measured requests.
+            wait=max(0,61-(time.monotonic()-warm_start))
+            if wait:
+                time.sleep(wait)
+            tracker.close()
+            tracker=HttpClient(base)
+            templates.append(tracker)
+            tracked=login(tracker,tracker_mobile)
+            assert tracked.status_code in (302,303), 'Fresh tracking OTP login failed'
+            assert tracker.get(f"/application/{tracker_id}").status_code == 200
             preparation_seconds = time.monotonic() - warm_start
             print(json.dumps({"prepared": {"synthetic_contacts": len(synthetic), "seconds": round(preparation_seconds, 3),
                 "auth": "Actual captcha, delivered OTP, forms/upload; no injected logged-in state", "carrier_delay_seconds": [gateway.DELAY_MIN, gateway.DELAY_MAX]}}), flush=True)
@@ -276,7 +287,11 @@ def main():
             logs = (work / "server.log").read_text()
             source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
             correct = not any(report["incorrect_completions"] or report["duplicate_intents"] or report["missing_intents"] for report in reports) and duplicates == 0
-            summary = {"source_commit": source_commit, "python": platform.python_version(), "postgres": db.version,
+            candidates=subprocess.check_output(['git','ls-files','--full-name','--cached','--others','--exclude-standard','-z','--','app','smsgw'],cwd=ROOT).decode().strip('\0').split('\0')
+            manifest=''.join(name+' '+hashlib.sha256((ROOT.parent/name).read_bytes()).hexdigest()+'\n' for name in sorted(set(candidates)) if name)
+            source_digest=hashlib.sha256(manifest.encode()).hexdigest()
+            idle_after=query(db,"SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND state LIKE %s",("idle in transaction%",))[0][0]
+            summary = {"source_commit": source_commit,"runtime_source_sha256":source_digest,"idle_in_transaction_after":idle_after, "python": platform.python_version(), "postgres": db.version,
                 "hardware": {"cpus": os.cpu_count(), "memory_bytes": os.sysconf("SC_PAGE_SIZE")*os.sysconf("SC_PHYS_PAGES"), "kernel": platform.release()},
                 "workers": 4, "worker_class": "sync", "db_max_connections": 30, "shared_buffers_mib": 32,
                 "scenario_sha256": hashlib.sha256(scenario_bytes).hexdigest(), "scenario": scenario,

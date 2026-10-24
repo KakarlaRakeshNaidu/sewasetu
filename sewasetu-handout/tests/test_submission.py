@@ -209,3 +209,67 @@ def test_submission_exception_releases_aborted_database_transactions(submission,
         for connection in opened:
             connection.close()
     assert aborted == 0, "Submission failures retained aborted PostgreSQL transactions"
+
+
+def test_receipt_render_releases_database_and_cache_tracks_decision(submission,monkeypatch):
+    ctx=submission
+    client=ctx.portal.app.test_client()
+    data=prepare(client,ctx.mobile)
+    assert client.post('/declaration',data=data,follow_redirects=True).status_code==200
+    app_id=rows(ctx.database,ctx.mobile)[0][0]
+    opened=[]
+    def connect():
+        conn=ctx.database.connect();opened.append(conn);return conn
+    monkeypatch.setattr(ctx.portal,'get_db',connect)
+    original=ctx.portal.generate_acknowledgment
+    rendered=[]
+    def detached(cur,ident,row=None):
+        assert cur is None and all(conn.closed for conn in opened), 'Renderer retained a PostgreSQL connection'
+        rendered.append(row[-1])
+        return original(cur,ident,row=row)
+    monkeypatch.setattr(ctx.portal,'generate_acknowledgment',detached)
+    assert client.get(f'/ack/{app_id}.pdf').status_code==200
+    assert client.get(f'/ack/{app_id}.pdf').status_code==200
+    assert rendered==['PENDING']
+    with closing(ctx.database.connect()) as conn,conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE applications SET status='APPROVED' WHERE id=%s",(app_id,))
+    assert client.get(f'/ack/{app_id}.pdf').status_code==200
+    assert rendered==['PENDING','APPROVED']
+
+
+def test_concurrent_receipt_requests_render_one_atomic_cache_entry(submission,monkeypatch):
+    import time
+    ctx=submission
+    client=ctx.portal.app.test_client()
+    data=prepare(client,ctx.mobile)
+    assert client.post('/declaration',data=data,follow_redirects=True).status_code==200
+    app_id=rows(ctx.database,ctx.mobile)[0][0]
+    clients=[clone_client(ctx.portal,client) for _ in range(4)]
+    original=ctx.portal.generate_acknowledgment
+    calls=[]
+    def slow(*args,**kwargs):
+        calls.append(True);time.sleep(.1);return original(*args,**kwargs)
+    monkeypatch.setattr(ctx.portal,'generate_acknowledgment',slow)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        responses=list(pool.map(lambda browser:browser.get(f'/ack/{app_id}.pdf'),clients))
+    assert all(r.status_code==200 and r.data.startswith(b'%PDF-') for r in responses)
+    assert len(calls)==1
+    assert len({r.data for r in responses})==1
+
+
+def test_pdf_failure_does_not_hide_accepted_status_and_receipt_can_retry(submission,monkeypatch):
+    ctx=submission
+    client=ctx.portal.app.test_client()
+    data=prepare(client,ctx.mobile)
+    assert client.post('/declaration',data=data,follow_redirects=True).status_code==200
+    app_id,number,_=rows(ctx.database,ctx.mobile)[0]
+    original=ctx.portal.generate_acknowledgment
+    def unavailable(*args,**kwargs):
+        raise RuntimeError('Synthetic renderer outage')
+    monkeypatch.setattr(ctx.portal,'generate_acknowledgment',unavailable)
+    assert client.get(f'/ack/{app_id}.pdf').status_code==503
+    assert number.encode() in client.get(f'/application/{app_id}').data
+    monkeypatch.setattr(ctx.portal,'generate_acknowledgment',original)
+    assert client.get(f'/ack/{app_id}.pdf').status_code==200
+    assert len(rows(ctx.database,ctx.mobile))==1

@@ -3,7 +3,8 @@ import configparser
 import importlib.util
 import os
 import sys
-from datetime import date, datetime
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -26,7 +27,7 @@ portal.app.secret_key = os.environ["REPLAY_SECRET"]
 class ReplayDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
-        instant = datetime(2026, 10, 24, 12, tzinfo=ZoneInfo("Asia/Kolkata"))
+        instant = datetime(2026, 10, 24, 12, tzinfo=ZoneInfo("Asia/Kolkata")) + timedelta(seconds=time.time()-float(os.environ["REPLAY_CLOCK_EPOCH"]))
         return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
 
 class ReplayDate(date):

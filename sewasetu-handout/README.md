@@ -44,7 +44,7 @@ PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/replay_submission.p
 
 The command owns a new temporary restored cluster, a four-worker loopback Gunicorn instance and a local SMS fixture; it accepts no external target URL and starts no scheduler. Synthetic applicants complete the actual captcha/OTP/form/upload routes. All 100,002 original applications/accounts are reconciled before and after; only synthetic records are added to the disposable copy. Tools are ordinary development dependencies, not extra production services.
 
-The identifier-free scenario retains 13 submission/detail events from a 159-request minute. Each phase compresses the 60-second shape by 12; the middle phase adds four concurrent retries per event. This is a controlled subset/stress replay, not the complete production workload or a capacity claim. Authentication/preparation time is reported separately. Output contains latency/completion/error/connection/resource aggregates and redacted query-plan shapes; correctness failures cause exit 1 independently of timing. The uncorrected portal is expected to fail. Stop its owned processes and remove only their temporary directories on interruption; never delete an inherited volume.
+The identifier-free scenario retains 13 submission/detail events from a 159-request minute. Each phase compresses the 60-second shape by 12; the middle phase adds four concurrent retries per event. This is a controlled subset/stress replay, not the complete production workload or a capacity claim. Authentication/preparation time is reported separately. Output contains latency/completion/error/connection/resource aggregates and redacted query-plan shapes; correctness failures cause exit 1 independently of timing. The command exits nonzero on a correctness failure. Stop its owned processes and remove only their temporary directories on interruption; never delete an inherited volume.
 
 ## Supplied Compose topology
 
@@ -54,7 +54,7 @@ Container builds, the full Compose topology, production configuration, migration
 
 ## Current limitations
 
-Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Access protection and OTP-based legacy-account continuity are implemented and privately tested. Statutory scheduling, durable submission, inclusive uploads, pending corrections and faithful Indic identity remain pending. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
+Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Access protection and OTP-based legacy-account continuity are implemented and privately tested. Statutory processing/outbox and resilient submissions are privately verified. Actual scheduled container execution, inclusive uploads, pending corrections and faithful Indic identity remain pending. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
 
 Local planning/agent notes are excluded by the user's ignore policy. This omits agent configuration and prompt evidence required by BRIEF.md; regression tests remain trackable and are not omitted from the repository.
 
@@ -73,7 +73,7 @@ Use the separate database-owner environment for these commands; do not inject mi
 
 Citizen tracking and recovery use delivered purpose-bound OTPs, including inherited accounts; original account hashes remain unchanged. A verified contact can access associated applications. Shared-phone users share contact access. The public assessment gateway exposes OTPs and provides no real SMS confidentiality. Logout revokes server-side sessions; recovery revokes previous citizen sessions. Staff and citizen authentication rotate opaque cookie identifiers. All form POSTs require CSRF tokens. Session idle/absolute limits are 30 minutes/two hours; OTP lifetime is five minutes. Staff role and citizen ownership are checked before receipt cache access.
 
-The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience, final upload/form design, Unicode receipts, operations and public verification are still pending.
+The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience is implemented. Final upload/form design, Unicode receipts, operations and public verification remain pending.
 
 ## Statutory decisions and notifications
 
@@ -98,3 +98,11 @@ PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/verify_statutory_re
 ```
 
 This owns its databases and a mode-0600 before/after manifest and PostgreSQL archive. It restores the archive into a separate fresh cluster before catch-up, reconciles immutable data and removes only those owned temporary artifacts. It accepts no live target. For a live catch-up, first retain an encrypted private backup and reviewed row manifest outside Git. Erroneous-decision rollback is a reviewed row-level operation: match each current row against its recorded after-image, restore only prior status/decision fields under locks, append a rollback audit entry and cancel unsent PENDING events. Reject conflicts instead of overwriting subsequent changes. Carrier-accepted or delivered SMS cannot be unsent. Whole-database restore is not a routine decision rollback.
+
+## Acceptance and receipts
+
+Each verified draft has a unique intent key. Acceptance locks that draft and atomically saves one application, its contact-account association, audit, notification event and result. Repeat or concurrent submits return the same authorized confirmation through POST/Redirect/GET. Database uniqueness and at most eight attempts handle reference collisions without changing inherited numbers or sequence state. Existing accounts are preserved; new contact rows carry an unusable OTP-only marker rather than a DOB password.
+
+SMS delivery and PDF rendering do not run inside acceptance. An authorized receipt is generated on demand after releasing PostgreSQL, with bounded file-lock wait, an atomic private cache and a data/version fingerprint. A failed PDF can be retried while tracking remains available. Cache authorization always precedes file access. The original thousands of decorative PDF line operations are removed. Rendering faithful Indic identity remains the next dedicated data-format fix.
+
+The controlled full-data replay passed after this change: all 20 burst retry responses returned one result for each of five intents; no duplicates, missing intents, reference collisions or HTTP errors. On this small local scenario, submission p95 fell from 55.147 to 39.491 ms during burst and 55.926 to 31.282 ms during baseline, including the new success redirect. These are four-worker localhost measurements, not production capacity or an SLO. Original application/account checksums were unchanged. Final release measurements must be repeated after later changes.
