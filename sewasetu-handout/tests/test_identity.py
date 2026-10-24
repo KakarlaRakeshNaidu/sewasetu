@@ -10,7 +10,9 @@ from citizen_support import citizen,verified,prepare,submit,post_form,query,rows
 from submission_support import login
 
 
-NAMES=['श्रीमती कमला देवी शर्मा','শ্ৰীমতী জোনালী বৰা','শ্রীমতী নন্দিতা চক্রবর্তী','A\u0301sha Kumari Devi Sharma']
+NAMES=['श्रीमती कमला देवी शर्मा','শ্ৰীমতী জোনালী বৰা','শ্রীমতী নন্দিতা চক্রবর্তী','A\u0301sha Kumari Devi Sharma',
+    'श्रीमती '+('कमला देवी '*7)+'शर्मा','শ্রীমতী '+('নন্দিতা দেবী '*5)+'চক্রবর্তী']
+assert all(len(name)<=100 for name in NAMES)
 
 
 def set_identity(client,name,dob):
