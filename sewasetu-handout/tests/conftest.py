@@ -28,7 +28,8 @@ def load_module(name, path):
 def database():
     with PostgresSandbox() as db:
         db.load(ROOT / "app/schema.sql")
-        db.load(ROOT / "app/migrations/001_access.sql")
+        for migration in sorted((ROOT / "app/migrations").glob("*.sql")):
+            db.load(migration)
         yield db
 
 

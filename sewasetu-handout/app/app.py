@@ -37,6 +37,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 sys.path.insert(0, BASE_DIR)
 from runtime import settings, Database
 from access import install, issue, consume
+from notifications import enqueue
 
 SETTINGS = settings()
 app = Flask(__name__)
@@ -51,7 +52,7 @@ SMS_GATEWAY_URL = os.environ.get('SMS_GATEWAY_URL','http://smsgw:8025').rstrip('
 OTP_VALIDITY_SECONDS = SETTINGS['otp_seconds']
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR',os.path.join(BASE_DIR,'..','uploads'))
 SCHEME_DEADLINE = SETTINGS['deadline']
-MIN_AGE, SLA_DAYS = int(os.environ.get('MIN_AGE','60')), int(os.environ.get('SLA_DAYS','15'))
+MIN_AGE, SLA_DAYS = SETTINGS['min_age'], SETTINGS['sla_days']
 BLOCKS = ['Sonari','Rajapara','Dhemaji Pathar','Borgaon','Namti','Khelua']
 _database = Database(SETTINGS)
 
@@ -560,9 +561,11 @@ def admin_dashboard():
     cur.execute("SELECT block, count(*) FROM applications WHERE status = 'PENDING' "
                 "GROUP BY block ORDER BY count(*) DESC")
     by_block = cur.fetchall()
+    cur.execute("SELECT status,count(*) FROM notification_outbox GROUP BY status")
+    notifications = cur.fetchall()
     cur.close(); conn.close()
     return render_template("admin_dashboard.html", by_status=by_status,
-                           overdue=overdue, by_block=by_block, sla=SLA_DAYS)
+                           overdue=overdue, by_block=by_block, sla=SLA_DAYS, notifications=notifications)
 
 
 @app.route("/admin/applications")
@@ -599,7 +602,10 @@ def admin_view(app_id):
     cur.close(); conn.close()
     if not row:
         abort(404)
-    return render_template("admin_view.html", a=row, app_id=app_id)
+    with transaction() as audit:
+        audit.execute("SELECT event,actor,occurred_at FROM application_audit WHERE application_id=%s ORDER BY id DESC LIMIT 50",(app_id,))
+        history = audit.fetchall()
+    return render_template("admin_view.html", a=row, app_id=app_id, history=history)
 
 
 def decide(app_id,status):
@@ -607,9 +613,11 @@ def decide(app_id,status):
         abort(403)
     instant = now()
     with transaction() as cur:
-        cur.execute("UPDATE applications SET status=%s,decided_at=%s,decided_by=%s WHERE id=%s AND status='PENDING' RETURNING id",
+        cur.execute("UPDATE applications SET status=%s,decided_at=%s,decided_by=%s WHERE id=%s AND status='PENDING' RETURNING id,application_no,mobile",
             (status,instant.replace(tzinfo=None),session['actor'],app_id))
-        if cur.fetchone():
+        decision = cur.fetchone()
+        if decision:
+            enqueue(cur,app_id,status,decision[2],'Sewa Setu: application '+decision[1]+' decision: '+status,instant)
             cur.execute('INSERT INTO application_audit(application_id,event,actor,occurred_at) VALUES(%s,%s,%s,%s)',
                 (app_id,status,session['actor'],instant))
         else:

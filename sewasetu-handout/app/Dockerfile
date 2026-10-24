@@ -1,7 +1,10 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends cron \
+RUN apt-get update && apt-get install -y --no-install-recommends cron tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=Asia/Kolkata
+RUN ln -snf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && echo Asia/Kolkata > /etc/timezone
 
 WORKDIR /app
 COPY requirements.txt .

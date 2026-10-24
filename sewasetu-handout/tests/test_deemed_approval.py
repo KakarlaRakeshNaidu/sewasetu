@@ -34,7 +34,7 @@ def snapshot(ctx):
 def sla(database):
     with closing(database.connect()) as connection, connection:
         with connection.cursor() as cursor:
-            cursor.execute("TRUNCATE applications, portal_users, otps RESTART IDENTITY")
+            cursor.execute("TRUNCATE applications, portal_users, otps, application_audit, notification_outbox RESTART IDENTITY CASCADE")
     gateway = load_module("sla_test_gateway", ROOT / "smsgw/app.py")
     gateway.DELAY_MIN = gateway.DELAY_MAX = 0
     server = make_server("127.0.0.1", 0, gateway.app)

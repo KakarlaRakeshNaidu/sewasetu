@@ -30,4 +30,5 @@
 </form>
 </p>
 {% endif %}
+<h3>Decision history</h3><table class="tbl"><tr><th>Event</th><th>Actor</th><th>Time</th></tr>{% for event,actor,time in history %}<tr><td>{{ event }}</td><td>{{ actor }}</td><td>{{ time }}</td></tr>{% endfor %}</table>
 {% endblock %}

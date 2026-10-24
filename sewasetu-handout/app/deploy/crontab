@@ -1,3 +1,5 @@
-# Sewa Setu scheduled jobs
+# Daemon timezone is /etc/localtime=Asia/Kolkata, not just application TZ.
 PATH=/usr/local/bin:/usr/bin:/bin
-0 2 * * * python /app/scripts/deemed_approval.py >> /var/log/sewasetu/cron.log 2>&1
+0 2 * * * /usr/local/bin/python /app/scripts/run_job.py statutory >> /proc/1/fd/1 2>> /proc/1/fd/2
+* * * * * /usr/local/bin/python /app/scripts/run_job.py outbox >> /proc/1/fd/1 2>> /proc/1/fd/2
+17 * * * * /usr/local/bin/python /app/scripts/run_job.py cleanup >> /proc/1/fd/1 2>> /proc/1/fd/2

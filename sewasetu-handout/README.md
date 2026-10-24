@@ -48,9 +48,9 @@ The identifier-free scenario retains 13 submission/detail events from a 159-requ
 
 ## Supplied Compose topology
 
-The supplied docker-compose.yml defines app, PostgreSQL 15, gateway and scheduler services. App runtime uses app/config/app.ini; the gateway's internal port is 8025 and its console/inbox are proxied through /__gateway/ on the app. No additional gateway port needs public exposure. Inherited admin/status entry points are /admin and /status.
+The supplied docker-compose.yml defines app, PostgreSQL 15, gateway and scheduler services. App runtime uses validated private environment variables; the gateway's internal port is 8025 and its console/inbox are proxied through /__gateway/ on the app. No additional gateway port needs public exposure. Inherited admin/status entry points are /admin and /status.
 
-Container builds, the full Compose topology, production configuration, migrations, restart/recovery and public deployment remain unverified. There are no new migrations in this baseline. Do not start the inherited Compose topology against real/restored data for measurements: it starts the statutory scheduler and publishes the app with known default credentials. Use the disposable commands above.
+Container builds, the full Compose topology, production configuration, migrations, restart/recovery and public deployment remain unverified. Apply the versioned additive migrations before starting the configured app. Do not start the inherited Compose topology against real/restored data for measurements: baseline measurement must keep the statutory scheduler disabled and traffic private. Use the disposable commands above.
 
 ## Current limitations
 
@@ -74,3 +74,27 @@ Use the separate database-owner environment for these commands; do not inject mi
 Citizen tracking and recovery use delivered purpose-bound OTPs, including inherited accounts; original account hashes remain unchanged. A verified contact can access associated applications. Shared-phone users share contact access. The public assessment gateway exposes OTPs and provides no real SMS confidentiality. Logout revokes server-side sessions; recovery revokes previous citizen sessions. Staff and citizen authentication rotate opaque cookie identifiers. All form POSTs require CSRF tokens. Session idle/absolute limits are 30 minutes/two hours; OTP lifetime is five minutes. Staff role and citizen ownership are checked before receipt cache access.
 
 The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience, final upload/form design, Unicode receipts, operations and public verification are still pending.
+
+## Statutory decisions and notifications
+
+After backup, migrations and private dry-run verification, use the restricted runtime environment:
+
+```sh
+.venv/bin/python app/scripts/deemed_approval.py --dry-run
+.venv/bin/python app/scripts/deemed_approval.py
+.venv/bin/python app/notifications.py
+```
+
+The job recomputes the current cutoff, interprets inherited naive timestamps as IST, includes the exact 15-day boundary and processes guarded batches of 100 under an overlap lock. Decisions, audit and a unique notification event commit together. Manual decisions win their row-lock race; reruns do not repeat decisions. Staff dashboards show notification states and decision audit history. PENDING/QUEUED are not delivery confirmation; FAILED needs operator attention. The worker releases PostgreSQL before HTTP, uses short claim leases, bounded retry/backoff and actual inbox delivery confirmation. The supplied simulated gateway supports persistent event-key deduplication through its private volume. Do not remove that volume during restart/rollback.
+
+The scheduler is opt-in: `docker compose --profile scheduler up -d scheduler`, only after deployment verification. The image sets `/etc/localtime` to Asia/Kolkata for the cron daemon itself. Its private environment launcher supplies only runtime variables to jobs; migration credentials are never written there. Statutory cron is 02:00 IST, outbox every minute, expired session/OTP cleanup hourly. Sanitized output goes to container logs. Actual container cron/reboot has not yet been demonstrated because Docker's Linux engine is unavailable locally.
+
+Full private-copy catch-up/backup restore verification:
+
+```sh
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/verify_statutory_restore.py \
+  --seed seed/seed.sql \
+  --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
+```
+
+This owns its databases and a mode-0600 before/after manifest and PostgreSQL archive. It restores the archive into a separate fresh cluster before catch-up, reconciles immutable data and removes only those owned temporary artifacts. It accepts no live target. For a live catch-up, first retain an encrypted private backup and reviewed row manifest outside Git. Erroneous-decision rollback is a reviewed row-level operation: match each current row against its recorded after-image, restore only prior status/decision fields under locks, append a rollback audit entry and cancel unsent PENDING events. Reject conflicts instead of overwriting subsequent changes. Carrier-accepted or delivered SMS cannot be unsent. Whole-database restore is not a routine decision rollback.

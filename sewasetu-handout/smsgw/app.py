@@ -5,6 +5,14 @@ web console at / once "delivered", after a short carrier latency.
 """
 
 import random
+import os
+import json
+import tempfile
+import threading
+import fcntl
+import logging
+from contextlib import contextmanager
+from pathlib import Path
 import time
 from flask import Flask, request, jsonify, render_template_string
 
@@ -39,32 +47,79 @@ td,th{border:1px solid #ccc;padding:6px 10px;font-size:14px;text-align:left}
 """
 
 
-@app.route("/api/send", methods=["POST"])
+_lock = threading.RLock()
+_next_id = 0
+
+
+@contextmanager
+def queue_store(write=False):
+    """Private single-file durable simulation queue; flock covers multiple gateway workers."""
+    global _next_id
+    filename = os.environ.get('GATEWAY_STORE')
+    with _lock:
+        if not filename:
+            yield
+            return
+        path = Path(filename)
+        path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        with open(str(path)+'.lock','a+') as lock:
+            os.chmod(lock.name,0o600)
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            if path.exists():
+                data = json.loads(path.read_text())
+                MESSAGES[:] = data['messages']
+                _next_id = data['next_id']
+            yield
+            if write:
+                fd,temporary = tempfile.mkstemp(dir=path.parent,prefix='queue-')
+                try:
+                    with os.fdopen(fd,'w') as output:
+                        json.dump({'next_id':_next_id,'messages':MESSAGES},output)
+                        output.flush();os.fsync(output.fileno())
+                    os.replace(temporary,path)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+
+
+@app.route('/api/send',methods=['POST'])
 def send():
-    data = request.get_json(force=True, silent=True) or request.form
-    to = data.get("to", "")
-    text = data.get("text", "")
-    if not to or not text:
-        return jsonify({"status": "error", "reason": "to and text required"}), 400
-    now = time.time()
-    msg = {
-        "id": len(MESSAGES) + 1,
-        "to": to,
-        "text": text,
-        "sent_at": now,
-        "delivery_at": now + random.randint(DELAY_MIN, DELAY_MAX),
-    }
-    MESSAGES.append(msg)
-    return jsonify({"status": "queued", "id": msg["id"]})
+    global _next_id
+    data = request.get_json(force=True,silent=True) or request.form
+    to,text,event = data.get('to',''),data.get('text',''),data.get('event_key')
+    if not isinstance(to,str) or not isinstance(text,str) or not to or len(to)>15 or not text or len(text)>1000 or (event is not None and (not isinstance(event,str) or len(event)>120)):
+        return jsonify(status='error',reason='invalid message'),400
+    try:
+        with queue_store(write=True):
+            now = time.time()
+            # Retention exceeds bounded retry/lease windows; accepted SMS cannot be unsent.
+            MESSAGES[:] = [m for m in MESSAGES if now-m['sent_at']<7*86400]
+            if event:
+                previous = next((m for m in MESSAGES if m.get('event_key')==event),None)
+                if previous:
+                    if previous['to']!=to or previous['text']!=text:
+                        return jsonify(status='error',reason='event conflict'),409
+                    return jsonify(status='queued',id=previous['id'])
+            if len(MESSAGES)>=50000:
+                return jsonify(status='error',reason='queue full'),503
+            _next_id+=1
+            msg={'id':_next_id,'to':to,'text':text,'event_key':event,'sent_at':now,
+                 'delivery_at':now+random.randint(DELAY_MIN,DELAY_MAX)}
+            MESSAGES.append(msg)
+            return jsonify(status='queued',id=msg['id'])
+    except (OSError,ValueError,KeyError):
+        return jsonify(status='error',reason='queue storage unavailable'),503
 
 
 @app.route("/api/messages")
 def messages():
     # Inbox query for a given number. Used to read delivered OTPs/SMS.
     to = request.args.get("to", "")
+    with queue_store():
+        snapshot = list(MESSAGES)
     now = time.time()
     out = []
-    for m in MESSAGES:
+    for m in snapshot:
         if to and m["to"] != to:
             continue
         out.append({
@@ -78,9 +133,11 @@ def messages():
 
 @app.route("/")
 def console():
+    with queue_store():
+        snapshot = list(MESSAGES)
     now = time.time()
     view = []
-    for m in reversed(MESSAGES[-100:]):
+    for m in reversed(snapshot[-100:]):
         view.append({
             "id": m["id"], "to": m["to"], "text": m["text"],
             "sent_hhmm": time.strftime("%H:%M:%S", time.localtime(m["sent_at"])),
@@ -89,6 +146,8 @@ def console():
         })
     return render_template_string(CONSOLE, messages=view)
 
+
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8025)

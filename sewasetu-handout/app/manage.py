@@ -57,6 +57,8 @@ def rotate(connection):
         cur.execute('GRANT SELECT,INSERT,UPDATE ON applications TO portal_runtime')
         cur.execute('GRANT SELECT,INSERT ON portal_users,application_audit TO portal_runtime')
         cur.execute('GRANT SELECT,INSERT,UPDATE,DELETE ON web_sessions,portal_challenges,application_drafts TO portal_runtime')
+        cur.execute('GRANT SELECT,INSERT,UPDATE ON notification_outbox TO portal_runtime')
+        cur.execute('GRANT USAGE ON SEQUENCE notification_outbox_id_seq TO portal_runtime')
         cur.execute('GRANT USAGE ON SEQUENCE applications_id_seq,application_audit_id_seq TO portal_runtime')
     print('Owner password rotated; restricted portal_runtime role configured. Update private operator and runtime environments.')
 

@@ -80,7 +80,7 @@ def delivered_code(client, mobile):
     while time.monotonic() < deadline:
         response = client.get("/__gateway/api/messages", query_string={"to": mobile})
         assert response.status_code == 200, "Required gateway inbox unavailable"
-        for message in reversed(response.json["messages"]):
+        for message in response.json["messages"][-1:]:
             if message["delivered"] and message["text"]:
                 match = re.search(r"\b\d{6}\b", message["text"])
                 if match:

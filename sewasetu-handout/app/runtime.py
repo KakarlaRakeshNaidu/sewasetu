@@ -16,7 +16,7 @@ def settings():
         raise RuntimeError("Required private runtime configuration is missing")
     if min(len(e["SECRET_KEY"]), len(e["OTP_HMAC_KEY"])) < 32 or e["SECRET_KEY"] == e["OTP_HMAC_KEY"] or "ssp-prod-key" in e["SECRET_KEY"]:
         raise RuntimeError("Use independent newly generated signing and OTP secrets")
-    if e["ADMIN_USERNAME"] == "admin" or not e["ADMIN_PASSWORD_HASH"].startswith(("scrypt:", "pbkdf2:")):
+    if not 1 <= len(e["ADMIN_USERNAME"]) <= 50 or e["ADMIN_USERNAME"] == "admin" or not e["ADMIN_PASSWORD_HASH"].startswith(("scrypt:", "pbkdf2:")):
         raise RuntimeError("Configure new staff credentials using a modern password hash")
     db = make_url(e["DATABASE_URL"])
     if db.get_backend_name() != "postgresql" or (mode == "production" and (not db.password or db.password in ("ssp_pass", "password", "sewasetu", "sewasetu123"))):
@@ -36,6 +36,7 @@ def settings():
     return dict(mode=mode, secret=e["SECRET_KEY"], otp_key=e["OTP_HMAC_KEY"], database_url=e["DATABASE_URL"],
         admin=e["ADMIN_USERNAME"], admin_hash=e["ADMIN_PASSWORD_HASH"], secure=secure,
         public_origin=public.scheme+"://"+public.netloc, deadline=deadline,
+        sla_days=number("SLA_DAYS",15,15,15),min_age=number("MIN_AGE",60,60,60),
         pool_size=number("DB_POOL_SIZE",3,1,10), pool_overflow=number("DB_POOL_OVERFLOW",1,0,5),
         otp_seconds=number("OTP_VALIDITY_SECONDS",300,60,600), attempts=number("OTP_MAX_ATTEMPTS",5,1,10),
         cooldown=number("OTP_RESEND_COOLDOWN_SECONDS",60,1,300), sends=number("OTP_MAX_SENDS_PER_HOUR",10,1,30),

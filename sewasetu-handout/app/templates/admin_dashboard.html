@@ -21,4 +21,6 @@
 <tr><td>{{ b }}</td><td style="text-align:right">{{ c }}</td></tr>
 {% endfor %}
 </table>
+<h3>SMS notifications</h3><p>Queued messages are awaiting carrier delivery. FAILED entries require operator attention.</p>
+<table class="tbl"><tr><th>State</th><th>Count</th></tr>{% for state,count in notifications %}<tr><td>{{ state }}</td><td>{{ count }}</td></tr>{% endfor %}</table>
 {% endblock %}
