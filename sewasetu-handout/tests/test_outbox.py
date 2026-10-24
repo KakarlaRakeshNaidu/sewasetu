@@ -85,3 +85,25 @@ def test_gateway_event_key_persists_across_process_module_restart(monkeypatch,tm
     assert two.json['id']==one.json['id'] and len(second_module.MESSAGES)==1
     assert second.post('/api/send',json=data|{'text':'Conflicting content'}).status_code==409
     assert (tmp_path/'private-gateway/queue.json').stat().st_mode & 0o077 == 0
+
+
+def test_later_outbox_claim_recomputes_clock_before_issuing_lease(sla,monkeypatch):
+    # A slow batch must not stamp every row with the batch-start timestamp.
+    import notifications
+    from datetime import datetime
+    invoke(sla)
+    clock=[INSTANT];calls=[];original=requests.post
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):return clock[0]
+    monkeypatch.setattr(notifications,'datetime',Clock)
+    def send(url,**kwargs):
+        calls.append(kwargs['json']['event_key'])
+        lease=sql(sla,'SELECT lease_until FROM notification_outbox WHERE event_key=%s',(kwargs['json']['event_key'],))[0][0]
+        assert lease>=clock[0]+timedelta(seconds=59),'New work was claimed with an already-expired batch-start lease'
+        response=original(url,**kwargs)
+        clock[0]+=timedelta(seconds=65)
+        return response
+    monkeypatch.setattr(notifications.requests,'post',send)
+    run_worker(sla.database,gateway=sla.gateway_url,limit=2)
+    assert len(calls)==2
