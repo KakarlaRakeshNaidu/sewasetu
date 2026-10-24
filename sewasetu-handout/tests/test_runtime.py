@@ -46,3 +46,34 @@ def test_real_role_rotation_restricts_runtime_and_returns_pool_connections(datab
         assert db.engine.pool.checkedout() == 0
     finally:
         db.engine.dispose()
+
+
+def test_concurrent_first_use_creates_one_shared_pool(database,monkeypatch):
+    import sys
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    sys.path.insert(0,str(ROOT/'app'))
+    import runtime
+    original=runtime.create_engine
+    calls=[]
+    def slow_engine(*args,**kwargs):
+        calls.append(True);time.sleep(.05);return original(*args,**kwargs)
+    monkeypatch.setattr(runtime,'create_engine',slow_engine)
+    db=runtime.Database({'mode':'test','database_url':'postgresql+psycopg2://sewasetu_test@/postgres?host='+quote(database.connection['host'],safe=''),
+        'pool_size':2,'pool_overflow':0})
+    barrier=threading.Barrier(4)
+    def operation(index):
+        barrier.wait()
+        conn=db.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute('SELECT1'.replace('SELECT1','SELECT 1'));assert cur.fetchone()==(1,)
+            conn.rollback()
+        finally:conn.close()
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(operation,range(4)))
+        assert len(calls)==1,'Concurrent startup allocated independent pools beyond the process connection budget'
+        assert db.engine.pool.checkedout()==0
+    finally:
+        if db.engine:db.engine.dispose()
