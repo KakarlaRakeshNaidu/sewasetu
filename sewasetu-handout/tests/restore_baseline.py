@@ -5,6 +5,8 @@ import importlib.util
 import io
 import json
 import math
+import os
+import secrets
 import re
 import statistics
 import sys
@@ -71,11 +73,18 @@ def percentiles(values):
 
 
 def profile(db, upload_dir):
+    # Private fixture configuration only; never reuse operator or live credentials.
+    from werkzeug.security import generate_password_hash
+    overrides={'APP_ENV':'development','PUBLIC_BASE_URL':'http://localhost','SECRET_KEY':secrets.token_urlsafe(48),
+        'OTP_HMAC_KEY':secrets.token_urlsafe(48),'DATABASE_URL':'postgresql+psycopg2://profile:private-fixture@localhost/profile',
+        'ADMIN_USERNAME':'profile-staff','ADMIN_PASSWORD_HASH':generate_password_hash('Synthetic-Only-Profile-Password'),
+        'SESSION_COOKIE_SECURE':'false','UPLOAD_DIR':str(upload_dir)}
+    os.environ.update(overrides)
     spec = importlib.util.spec_from_file_location("profile_portal", ROOT / "app/app.py")
     portal = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = portal
     spec.loader.exec_module(portal)
-    portal.get_db = lambda: db.connect(options="-c default_transaction_read_only=on")
+    portal.get_db = db.connect
     portal.UPLOAD_DIR = upload_dir
     portal.app.config.update(TESTING=True, SECRET_KEY="temporary-profile-key")
     with closing(portal.get_db()) as conn:
@@ -84,13 +93,16 @@ def profile(db, upload_dir):
             app_id, mobile = cur.fetchone()
     client = portal.app.test_client()
     with client.session_transaction() as session:
-        session.update(logged_in=True, portal_mobile=mobile)
+        session.update(logged_in=True, role="citizen", portal_mobile=mobile)
     timings = {"status_detail": [], "uncached_pdf": []}
     for _ in range(20):
         start = time.perf_counter()
         response = client.get(f"/application/{app_id}")
         assert response.status_code == 200
         timings["status_detail"].append((time.perf_counter() - start) * 1000)
+        # Remove only this profiler's generated cache, so every sample renders.
+        for cached in (Path(upload_dir)/'ack').glob('*.pdf'):
+            cached.unlink()
         start = time.perf_counter()
         response = client.get(f"/ack/{app_id}.pdf")
         assert response.status_code == 200 and response.data.startswith(b"%PDF-")
@@ -123,6 +135,7 @@ def main():
         # New initdb cluster only; no external database URL or scheduler is accepted.
         db.load(ROOT / "app/schema.sql")
         db.load(args.seed.resolve())
+        for migration in sorted((ROOT/'app/migrations').glob('*.sql')):db.load(migration)
         before = reconcile(db, source)
         with tempfile.TemporaryDirectory(prefix="sewasetu-profile-") as uploads:
             measurements = profile(db, uploads)

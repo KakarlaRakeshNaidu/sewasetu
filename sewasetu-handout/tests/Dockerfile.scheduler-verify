@@ -1,0 +1,5 @@
+# Test-only clock shim; never used by a runtime service.
+FROM sewasetu-app:local
+USER 0:0
+RUN apt-get update && apt-get install -y --no-install-recommends libfaketime \
+    && rm -rf /var/lib/apt/lists/*

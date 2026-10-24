@@ -1,61 +1,132 @@
+name: sewasetu-handout
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+x-app: &app
+  image: sewasetu-app:${RELEASE_SHA:-local}
+  build:
+    context: ./app
+    args: {RELEASE_SHA: "${RELEASE_SHA:-development}"}
+  restart: unless-stopped
+  logging: *logging
+  stop_grace_period: 40s
+  tmpfs: ["/tmp:mode=1777,size=128m"]
+  environment: &runtime_env
+    APP_ENV: production
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set HTTPS public origin}
+    SECRET_KEY: ${SECRET_KEY:?Generate signing secret}
+    OTP_HMAC_KEY: ${OTP_HMAC_KEY:?Generate separate OTP secret}
+    DATABASE_URL: ${DATABASE_URL:?Set restricted runtime role URL}
+    ADMIN_USERNAME: ${ADMIN_USERNAME:?Set new staff username}
+    ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?Set modern staff password hash}
+    SMS_GATEWAY_URL: http://smsgw:8025
+    UPLOAD_DIR: /var/sewasetu/uploads
+    SESSION_COOKIE_SECURE: 'true'
+    TRUST_PROXY: '1'
+    SCHEME_DEADLINE: ${SCHEME_DEADLINE:-2026-11-01T00:00:00+05:30}
+    DB_POOL_SIZE: '3'
+    DB_POOL_OVERFLOW: '1'
 services:
   db:
-    image: postgres:15
+    image: postgres:15@sha256:baa22e6286bf832cb147b8bb5aa9d8bc999846d69c21d11bf63f58fbeed1fa48
+    restart: unless-stopped
+    logging: *logging
+    shm_size: 128mb
     environment:
       POSTGRES_DB: sewasetu
       POSTGRES_USER: sewasetu
       POSTGRES_PASSWORD: ${MIGRATION_DATABASE_PASSWORD:?Set a new private owner password}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./app/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./seed/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
-
-  app:
-    build: ./app
-    environment: &runtime_env
-      APP_ENV: production
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set HTTPS public origin}
-      SECRET_KEY: ${SECRET_KEY:?Generate signing secret}
-      OTP_HMAC_KEY: ${OTP_HMAC_KEY:?Generate separate OTP secret}
-      DATABASE_URL: ${DATABASE_URL:?Set restricted runtime role URL}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:?Set new staff username}
-      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?Set modern staff password hash}
-      SMS_GATEWAY_URL: http://smsgw:8025
-      UPLOAD_DIR: /var/sewasetu/uploads
-      SESSION_COOKIE_SECURE: 'true'
-      SCHEME_DEADLINE: ${SCHEME_DEADLINE:-2026-11-01T00:00:00+05:30}
-    ports:
-      - "127.0.0.1:8000:8000"
-    depends_on:
-      - db
-      - smsgw
+      - type: bind
+        source: ./app/schema.sql
+        target: /docker-entrypoint-initdb.d/01-schema.sql
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./seed/seed.sql
+        target: /docker-entrypoint-initdb.d/02-seed.sql
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U sewasetu -d sewasetu"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  init:
+    image: sewasetu-app:${RELEASE_SHA:-local}
+    build:
+      context: ./app
+      args: {RELEASE_SHA: "${RELEASE_SHA:-development}"}
+    user: '0:0'
+    command: [python, /app/scripts/initialize_volumes.py]
+    restart: 'no'
+    logging: *logging
+    network_mode: none
     volumes:
       - uploads:/var/sewasetu/uploads
-      - applogs:/var/log/sewasetu
-
-  scheduler:
-    build: ./app
-    environment: *runtime_env
-    profiles: [scheduler]
-    command: ["python", "/app/scripts/scheduler.py"]
-    depends_on:
-      - db
-    volumes:
-      - applogs:/var/log/sewasetu
-
-  smsgw:
-    build: ./smsgw
-    environment:
-      GATEWAY_STORE: /var/sewasetu/gateway/queue.json
-    volumes:
       - gatewaydata:/var/sewasetu/gateway
-    # internal only — reached by the app over the docker network and exposed to
-    # users via the app at /__gateway/ (so no second host port is needed)
-    expose:
-      - "8025"
-
+  app:
+    <<: *app
+    read_only: true
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      smsgw: {condition: service_healthy}
+      init: {condition: service_completed_successfully}
+    volumes: ["uploads:/var/sewasetu/uploads"]
+  scheduler:
+    <<: *app
+    user: '0:0'
+    profiles: [scheduler]
+    command: [python, /app/scripts/scheduler.py]
+    healthcheck:
+      test: [CMD, python, -c, "from pathlib import Path; import os; p=Path('/run/crond.pid'); os.kill(int(p.read_text()),0); assert Path('/run/sewasetu/runtime.json').is_file()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      db: {condition: service_healthy}
+      smsgw: {condition: service_healthy}
+      init: {condition: service_completed_successfully}
+    volumes: ["uploads:/var/sewasetu/uploads"]
+  smsgw:
+    image: sewasetu-gateway:${RELEASE_SHA:-local}
+    build: ./smsgw
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:mode=1777,size=64m"]
+    logging: *logging
+    environment: {GATEWAY_STORE: /var/sewasetu/gateway/queue.json}
+    depends_on:
+      init: {condition: service_completed_successfully}
+    volumes: ["gatewaydata:/var/sewasetu/gateway"]
+    expose: ["8025"]
+  migrate:
+    image: sewasetu-app:${RELEASE_SHA:-local}
+    profiles: [operator]
+    restart: 'no'
+    command: [python, /app/manage.py, migrate]
+    logging: *logging
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+      MIGRATION_DATABASE_PASSWORD: ${MIGRATION_DATABASE_PASSWORD:-}
+      RUNTIME_DATABASE_PASSWORD: ${RUNTIME_DATABASE_PASSWORD:-}
+    depends_on:
+      db: {condition: service_healthy}
+  proxy:
+    image: nginx:stable-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
+    profiles: [production]
+    restart: unless-stopped
+    logging: *logging
+    ports: ["80:80", "443:443"]
+    environment: {PORTAL_HOST: "${PORTAL_HOST:-localhost}"}
+    volumes:
+      - ./ops/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./secrets/tls:/etc/nginx/tls:ro
+    depends_on:
+      app: {condition: service_healthy}
 volumes:
   gatewaydata:
   pgdata:
   uploads:
-  applogs:

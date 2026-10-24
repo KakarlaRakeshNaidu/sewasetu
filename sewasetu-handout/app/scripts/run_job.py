@@ -10,6 +10,9 @@ if len(sys.argv)!=2 or sys.argv[1] not in entries:
     raise SystemExit('Unknown scheduled entrypoint')
 entry=entries[sys.argv[1]]
 os.environ.update(json.loads(Path('/run/sewasetu/runtime.json').read_text()))
+# Cron remains privileged; business jobs run as the same restricted OS user as web.
+if os.getuid()==0:
+    os.setgroups([]);os.setgid(10001);os.setuid(10001)
 sys.path.insert(0,str(root))
 sys.argv=[str(entry)]
 try:

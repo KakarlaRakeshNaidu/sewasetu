@@ -1,0 +1,10 @@
+[Unit]
+Description=Sewa Setu encrypted consistent backup
+Requires=docker.service
+After=docker.service
+[Service]
+Type=oneshot
+# Install at the actual VM checkout; never put secrets in this unit.
+WorkingDirectory=/opt/sewasetu/sewasetu-handout
+ExecStart=/usr/bin/python3 -B ops/backup.py --destination /var/backups/sewasetu --passphrase-file /etc/sewasetu/backup-passphrase
+UMask=0077

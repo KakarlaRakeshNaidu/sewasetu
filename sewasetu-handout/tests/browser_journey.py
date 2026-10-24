@@ -25,14 +25,14 @@ def fit(page):
     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth+1'),'Page overflows horizontally'
 
 
-def apply(page,context,base,mobile,name,*,widow=False,jpeg=False,exercise_error=False):
+def apply(page,context,base,mobile,name,*,widow=False,jpeg=False,exercise_error=False,dob='13/12/1950'):
     page.goto(base+'/apply')
     question=page.locator('label[for=captcha]').inner_text();a,b=re.search(r'([0-9]+)\s*\+\s*([0-9]+)',question).groups()
     page.get_by_label('Mobile number').fill(mobile);page.locator('#captcha').fill(str(int(a)+int(b)))
     page.get_by_role('button',name='Send code and continue',exact=True).click()
     page.get_by_label('Six-digit code').fill(code(context,base,mobile));page.get_by_role('button',name='Verify and continue').click()
     page.get_by_label('Full name as on age proof').fill(name)
-    page.get_by_label('Date of birth').fill('31/02/1950' if exercise_error else '13/12/1950')
+    page.get_by_label('Date of birth').fill('31/02/1950' if exercise_error else dob)
     page.get_by_label('Gender',exact=False).select_option('Female' if widow else 'Male')
     page.get_by_label('Marital status').select_option('Widowed' if widow else 'Unmarried')
     page.get_by_role('button',name='Save and continue',exact=True).click()
@@ -41,7 +41,7 @@ def apply(page,context,base,mobile,name,*,widow=False,jpeg=False,exercise_error=
         assert page.get_by_label('Full name as on age proof').input_value()==name
         page.locator('.error-summary a[href="#dob"]').click()
         assert page.locator('#dob').evaluate('(element)=>element===document.activeElement')
-        page.get_by_label('Date of birth').fill('13/12/1950');page.get_by_role('button',name='Save and continue',exact=True).click()
+        page.get_by_label('Date of birth').fill(dob);page.get_by_role('button',name='Save and continue',exact=True).click()
     page.get_by_label('Village or town').fill('Synthetic Village');page.get_by_label('Block',exact=False).select_option('Sonari')
     page.get_by_role('button',name='Save and continue',exact=True).click()
     page.get_by_label('Bank account number').fill('000012345678');page.get_by_label('IFSC',exact=False).fill('TEST0000001')

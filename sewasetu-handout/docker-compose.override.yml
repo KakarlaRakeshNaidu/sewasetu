@@ -1,0 +1,10 @@
+# Localhost-only HTTP. Production MUST use -f docker-compose.yml explicitly.
+services:
+  app:
+    environment: &local_env
+      APP_ENV: development
+      PUBLIC_BASE_URL: http://127.0.0.1:8000
+      SESSION_COOKIE_SECURE: 'false'
+      TRUST_PROXY: '0'
+  scheduler:
+    environment: *local_env

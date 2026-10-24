@@ -77,9 +77,22 @@ def queue_store(write=False):
                         json.dump({'next_id':_next_id,'messages':MESSAGES},output)
                         output.flush();os.fsync(output.fileno())
                     os.replace(temporary,path)
+                    directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+                    try:os.fsync(directory)
+                    finally:os.close(directory)
                 finally:
                     if os.path.exists(temporary):
                         os.unlink(temporary)
+
+
+@app.get('/health')
+def health():
+    try:
+        with queue_store():pass
+        path=os.environ.get('GATEWAY_STORE')
+        if path and not os.access(Path(path).parent,os.W_OK):raise OSError()
+        return jsonify(status='ready')
+    except (OSError,ValueError,KeyError):return jsonify(status='unavailable'),503
 
 
 @app.route('/api/send',methods=['POST'])

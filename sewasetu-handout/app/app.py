@@ -636,5 +636,8 @@ from corrections import install as install_corrections
 install_citizen(sys.modules[__name__])
 install_corrections(sys.modules[__name__])
 
+from health import install as install_health
+install_health(sys.modules[__name__])
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)

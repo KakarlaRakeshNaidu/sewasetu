@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily Sewa Setu backup at 03:15 IST
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=120
+[Install]
+WantedBy=timers.target
