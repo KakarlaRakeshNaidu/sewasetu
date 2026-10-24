@@ -1,128 +1,136 @@
-# Sewa Setu - Old Age Pension Portal
+# Sewa Setu
 
-Inherited Flask/Jinja pension application, PostgreSQL database, scheduled deemed-approval job and simulated SMS gateway. Supported baseline journeys include application, receipt, status login and staff decisions.
+Old-age pension applications, OTP tracking/recovery, private receipts/documents, pending corrections and staff decisions. The inherited Flask/Jinja/PostgreSQL application and its routes are retained. Local CSS/progressive JavaScript supports a complete no-JavaScript journey. SQLAlchemy provides bounded PostgreSQL pools; a transactional outbox drives the required simulated SMS gateway. Indic receipts use fpdf2, HarfBuzz and bundled OFL-licensed Noto fonts.
 
-This is a local baseline, not a verified public release. Known authorization, recovery, eligibility and identity defects remain. Runtime now requires private environment configuration and rejects inherited defaults. Public deployment and the remaining fixes are pending.
+The verified target is **localhost**, as requested by the operator. VM/public TLS deployment, off-host retention/alerts and assessment submission remain operator tasks. A local Docker Desktop/WSL installation does not provide continuous public availability or high availability.
 
-## Local baseline verification
+New applications close at the exclusive instant **1 November 2026, 00:00 IST** (31 October is included). `SCHEME_DEADLINE` is configurable; no extension or assessor bypass is installed. Tracking, receipts, staff and `/__gateway/` remain available after closure.
 
-Use Linux/WSL as an unprivileged user, Python 3.11, and PostgreSQL 15 server/client binaries (`postgres`, `initdb`, `pg_ctl`, `psql`). Docker is not needed for these commands. A running database is not needed and is never used. Install development dependencies in a local environment:
+## Ranked fixes and evidence
+
+| Rank / citizen impact | Failing test commit | Passing fix commit | Retained checks |
+| --- | --- | --- | --- |
+| 1. Protect private records and staff decisions; prevent unauthorized reads/writes | `3631657` | `e3bbda3` | `tests/test_security.py`, `test_security_prerequisites.py` |
+| 2. Restore overdue statutory decisions; preserve manual decisions and notify once | `1dbc891` | `1412a70` | `tests/test_deemed_approval.py`, `test_outbox.py` |
+| 3. Accept each intent once despite PDF/SMS outages; keep tracking usable under retries | `46dbb9a` | `7c6327a` | `tests/test_submission.py`, `replay_submission.py` |
+| 4. Let widows/shared-phone adults complete, resume and safely correct pending applications | `3155c13` | `81e8018` | `tests/test_citizen.py`, `browser_journey.py` |
+| 5. Preserve accepted Indic names, bank strings and deterministic DOBs across all layers | `2df372f`, `0d765aa` | `bcc3af0` | `tests/test_identity.py` |
+
+Additional infrastructure regressions precede their repairs: UTC-host IST birthday `3753a70`; stale session responses `3466907`; concurrent pool initialization `71de742`; slow-batch outbox leases `c09ed51` → `dd6d57f`. Shared validation made some date/length guards pass during rank 4; those cases are preservation tests, not fabricated later failures. Full history is retained.
+
+An isolated 100,002-row restore reconciled original application/account COPY checksums and sequence before/after migrations and read-only profiling. A controlled 13-event local replay with four concurrent retries improved the burst from 3/20 correct responses and 9 applications for 5 intents to 20/20 and exactly 5 applications. Submission burst p95 was 55.147 → 39.491 ms; tracking 26.702 → 25.048 ms; peak observed DB connections 8 → 4. This small controlled scenario is not a production capacity claim. Later Unicode receipt profiling measured uncached PDF p95 135.498 ms across 20 local requests. Reproduce and report your own hardware/release results.
+
+## Private inputs and fresh installation
+
+Run from `sewasetu-handout/sewasetu-handout` on Linux/WSL with Docker Compose v2+, Python 3.11+, PostgreSQL 15 binaries for native tests, and GnuPG for backups. The original `seed/seed.sql`, log archive and briefing audio were supplied privately. They are ignored and excluded from images/ZIP; do not invent replacement citizen data. The seed SHA-256 is `0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320`.
+
+For a **new checkout only**:
 
 ```sh
-python3.11 -m venv .venv
+python3 -m venv .venv
 .venv/bin/python -m pip install -r app/requirements-dev.txt
-PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python -m pytest -q
+.venv/bin/python ops/configure.py
+python3 ops/preflight.py
+export RELEASE_SHA="$(git rev-parse HEAD)"
+docker compose build app smsgw
+docker compose up -d db
+docker compose --profile operator run --rm migrate
+docker compose --profile operator run --rm migrate python /app/manage.py rotate-roles
+docker compose --profile scheduler up -d --wait
 ```
 
-Set `PG_BIN_DIR` to your PostgreSQL 15 bin directory. For relocated package binaries, also set `PG_SHARE_DIR` to their matching PostgreSQL 15 share directory. Other major versions are rejected. The harness creates a fresh private Unix-socket cluster, loads only app/schema.sql, uses synthetic citizens and a loopback-only SMS gateway, and stops/deletes its own database after the run. It accepts no external database URL. The test clock is fixed before intake closure for reproducibility; the production clock and deadline are unchanged.
+`configure.py` refuses to overwrite `.env`, asks for a new staff password and generates independent signing, OTP, owner and runtime database secrets. Keep the environment/password outside Git. `.env.example` lists the contract; Compose single quotes preserve password-hash dollar signs. The migration account is supplied only to the operator service, never app/jobs. `rotate-roles` actually changes DB role passwords, denies runtime administrative privileges and grants limited table rights. Changing environment values alone does not rotate an existing database role.
 
-Tests exercise public routes, anonymous login boundaries, OTP through the actual gateway proxy, form steps, a generated PDF upload, submission, receipt, citizen status and a staff decision. They characterize supported inherited behavior; selected fixes still require separately committed failing regressions before implementation.
+The database entrypoint loads schema/seed **once into a fresh volume**. Missing seed mounts fail rather than creating a substitute directory. Never replay the seed over a nonempty volume, reset an inherited/restored DB or run `docker compose down -v`. Existing deployments reuse the database/uploads/gateway volumes. Additive migrations run under an advisory lock; existing IDs, account hashes, strings and timestamps are preserved.
 
-## Supplied-data restore and baseline measurements
+The automatic `docker-compose.override.yml` provides local HTTP at [127.0.0.1:8000](http://127.0.0.1:8000) with local cookies/proxy settings. It does not weaken the explicit production file. Login at `/admin` with the private configured staff credentials. Citizens verify a code through `/status` or `/status/reset`; inherited hashes are preserved and DOB alone is never sufficient. `/__gateway/` shows the simulation inbox; there is no second published gateway port.
 
-Keep the original supplied seed/seed.sql private and ignored. This command verifies its SHA-256 and restores it into another newly initialized temporary PostgreSQL 15 cluster, with no scheduler or public network listener:
+## Daily management and releases
 
 ```sh
-PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/restore_baseline.py \
-  --seed seed/seed.sql \
-  --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
+docker compose ps
+docker compose logs -f app
+docker compose stop
+docker compose up -d
+docker compose restart app
+# Source is bundled in the image: restart alone does not install edits.
+docker compose up -d --build app
 ```
 
-It compares every application's and account's PostgreSQL COPY fields against the source, checks statuses and sequence state, measures 20 local status-detail and uncached-PDF requests, captures aggregate query-plan information, and reconciles again after read-only profiling. Only counts, digests and timings are printed; original citizen responses and PDFs are not printed or retained. The owned cluster and temporary artifacts are removed on normal completion/failure. It cannot restore into an existing database. These measurements are local characterization, not load or capacity claims.
+Use `python3 ops/release.py` after reviewing/committing a clean working tree for a release identified by the actual Git SHA. It takes a current encrypted backup, builds pinned images, verifies baked source against committed blobs, applies migrations, starts healthy local services/scheduler, checks `/health/ready` against that SHA and saves only the public release identifier in private `.env`. It performs no Git mutations. `/health/live` tests the process; `/health/ready` checks database schema access, uploads and gateway. Both expose only status/release and create no session. Docker restarts failed containers; JSON logs rotate at 3 × 10 MB per service. Docker health status alone does not automatically restart a merely unhealthy process.
 
-The seed, log archives and briefing audio are supplied privately, not recreated or downloaded. Never replay the seed over a nonempty database, run the scheduler during baseline measurement, or delete an inherited database volume.
+`app` and gateway run as UID 10001 with read-only image filesystems and private writable volumes. A secret-free one-shot init service sets volume ownership. Cron remains privileged to start jobs; job launchers drop to UID 10001 before business code. Runtime images contain source/templates/assets/fonts/licenses, pinned production requirements, schema/migrations and operations entry points; no tests, dev tools, seed, logs, credentials or backups.
 
-## Controlled submission replay
-
-Run only on the privately supplied input with the PostgreSQL 15/Python 3.11 setup above:
+## Tests and reproducible evidence
 
 ```sh
-PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/replay_submission.py \
-  --seed seed/seed.sql \
-  --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
-```
-
-The command owns a new temporary restored cluster, a four-worker loopback Gunicorn instance and a local SMS fixture; it accepts no external target URL and starts no scheduler. Synthetic applicants complete the actual captcha/OTP/form/upload routes. All 100,002 original applications/accounts are reconciled before and after; only synthetic records are added to the disposable copy. Tools are ordinary development dependencies, not extra production services.
-
-The identifier-free scenario retains 13 submission/detail events from a 159-request minute. Each phase compresses the 60-second shape by 12; the middle phase adds four concurrent retries per event. This is a controlled subset/stress replay, not the complete production workload or a capacity claim. Authentication/preparation time is reported separately. Output contains latency/completion/error/connection/resource aggregates and redacted query-plan shapes; correctness failures cause exit 1 independently of timing. The command exits nonzero on a correctness failure. Stop its owned processes and remove only their temporary directories on interruption; never delete an inherited volume.
-
-## Supplied Compose topology
-
-The supplied docker-compose.yml defines app, PostgreSQL 15, gateway and scheduler services. App runtime uses validated private environment variables; the gateway's internal port is 8025 and its console/inbox are proxied through /__gateway/ on the app. No additional gateway port needs public exposure. Inherited admin/status entry points are /admin and /status.
-
-Container builds, the full Compose topology, production configuration, migrations, restart/recovery and public deployment remain unverified. Apply the versioned additive migrations before starting the configured app. Do not start the inherited Compose topology against real/restored data for measurements: baseline measurement must keep the statutory scheduler disabled and traffic private. Use the disposable commands above.
-
-## Current limitations
-
-Baseline checks have run on Python 3.11 and PostgreSQL 15 outside Docker. Access protection and OTP-based legacy-account continuity are implemented and privately tested. Statutory processing/outbox and resilient submissions are privately verified. Citizen forms, uploads and pending corrections are privately verified. Actual scheduled container execution and faithful Indic identity remain pending. The public fake SMS inbox is an assessment simulation and cannot provide real SMS confidentiality.
-
-Local planning/agent notes are excluded by the user's ignore policy. This omits agent configuration and prompt evidence required by BRIEF.md; regression tests remain trackable and are not omitted from the repository.
-
-## Access configuration and migrations
-
-Copy `.env.example` to a private operator environment and generate independent signing/OTP secrets and database passwords. Generate the staff password hash with Werkzeug `generate_password_hash`; keep the password and populated environment outside Git. There are no default working staff credentials. A production process requires an HTTPS public origin, secure cookies and a restricted PostgreSQL login. `TRUST_PROXY=1` is only for one trusted private reverse proxy.
-
-Use the separate database-owner environment for these commands; do not inject migration credentials into web workers:
-
-```sh
-.venv/bin/python app/manage.py migrate
-.venv/bin/python app/manage.py rotate-roles
-```
-
-`MIGRATION_DATABASE_URL` identifies the existing restored database. Migration runs additive versioned SQL under an advisory lock; it never loads seed data. Rotation requires independent `MIGRATION_DATABASE_PASSWORD` and `RUNTIME_DATABASE_PASSWORD` (at least 32 characters), actually changes the owner's password, and configures the restricted `portal_runtime` role. Update the private owner URL afterward; set web `DATABASE_URL` to the new runtime role. Existing volumes require this operator rotation: changing Compose variables alone does not rotate database passwords. Rotation was verified only on an owned disposable restored copy; an actual deployment still needs its own run and verification.
-
-Citizen tracking and recovery use delivered purpose-bound OTPs, including inherited accounts; original account hashes remain unchanged. A verified contact can access associated applications. Shared-phone users share contact access. The public assessment gateway exposes OTPs and provides no real SMS confidentiality. Logout revokes server-side sessions; recovery revokes previous citizen sessions. Staff and citizen authentication rotate opaque cookie identifiers. All form POSTs require CSRF tokens. Session idle/absolute limits are 30 minutes/two hours; OTP lifetime is five minutes. Staff role and citizen ownership are checked before receipt cache access.
-
-The bounded per-process pool defaults to three connections plus one overflow with a two-second wait. Budget workers and jobs within PostgreSQL limits. The scheduler remains opt-in until its separate repair and validation. Submission resilience is implemented. Citizen form design is implemented. Unicode receipts, operations and public verification remain pending.
-
-## Statutory decisions and notifications
-
-After backup, migrations and private dry-run verification, use the restricted runtime environment:
-
-```sh
-.venv/bin/python app/scripts/deemed_approval.py --dry-run
-.venv/bin/python app/scripts/deemed_approval.py
-.venv/bin/python app/notifications.py
-```
-
-The job recomputes the current cutoff, interprets inherited naive timestamps as IST, includes the exact 15-day boundary and processes guarded batches of 100 under an overlap lock. Decisions, audit and a unique notification event commit together. Manual decisions win their row-lock race; reruns do not repeat decisions. Staff dashboards show notification states and decision audit history. PENDING/QUEUED are not delivery confirmation; FAILED needs operator attention. The worker releases PostgreSQL before HTTP, uses short claim leases, bounded retry/backoff and actual inbox delivery confirmation. The supplied simulated gateway supports persistent event-key deduplication through its private volume. Do not remove that volume during restart/rollback.
-
-The scheduler is opt-in: `docker compose --profile scheduler up -d scheduler`, only after deployment verification. The image sets `/etc/localtime` to Asia/Kolkata for the cron daemon itself. Its private environment launcher supplies only runtime variables to jobs; migration credentials are never written there. Statutory cron is 02:00 IST, outbox every minute, expired session/OTP cleanup hourly. Sanitized output goes to container logs. Actual container cron/reboot has not yet been demonstrated because Docker's Linux engine is unavailable locally.
-
-Full private-copy catch-up/backup restore verification:
-
-```sh
-PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/verify_statutory_restore.py \
-  --seed seed/seed.sql \
-  --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
-```
-
-This owns its databases and a mode-0600 before/after manifest and PostgreSQL archive. It restores the archive into a separate fresh cluster before catch-up, reconciles immutable data and removes only those owned temporary artifacts. It accepts no live target. For a live catch-up, first retain an encrypted private backup and reviewed row manifest outside Git. Erroneous-decision rollback is a reviewed row-level operation: match each current row against its recorded after-image, restore only prior status/decision fields under locks, append a rollback audit entry and cancel unsent PENDING events. Reject conflicts instead of overwriting subsequent changes. Carrier-accepted or delivered SMS cannot be unsent. Whole-database restore is not a routine decision rollback.
-
-## Acceptance and receipts
-
-Each verified draft has a unique intent key. Acceptance locks that draft and atomically saves one application, its contact-account association, audit, notification event and result. Repeat or concurrent submits return the same authorized confirmation through POST/Redirect/GET. Database uniqueness and at most eight attempts handle reference collisions without changing inherited numbers or sequence state. Existing accounts are preserved; new contact rows carry an unusable OTP-only marker rather than a DOB password.
-
-SMS delivery and PDF rendering do not run inside acceptance. An authorized receipt is generated on demand after releasing PostgreSQL, with bounded file-lock wait, an atomic private cache and a data/version fingerprint. A failed PDF can be retried while tracking remains available. Cache authorization always precedes file access. The original thousands of decorative PDF line operations are removed. Rendering faithful Indic identity remains the next dedicated data-format fix.
-
-The controlled full-data replay passed after this change: all 20 burst retry responses returned one result for each of five intents; no duplicates, missing intents, reference collisions or HTTP errors. On this small local scenario, submission p95 fell from 55.147 to 39.491 ms during burst and 55.926 to 31.282 ms during baseline, including the new success redirect. These are four-worker localhost measurements, not production capacity or an SLO. Original application/account checksums were unchanged. Final release measurements must be repeated after later changes.
-
-## Citizen forms and corrections
-
-The five saved steps use server validation, explicit labels, linked errors and retained inputs. No JavaScript is required. Widow applications do not require a deceased spouse employer. Distinct adults can use one contact; a similar name/DOB creates a warning that can be acknowledged for a different eligible applicant, rather than a universal person identifier. All final fields, document state and the declaration are checked again on the server. A draft version prevents stale review from accepting changed values.
-
-JPG/JPEG/PDF uploads accept at most 5,242,880 bytes. Generated private paths never use the original filename. Content decoding runs with a four-second wall limit, two CPU seconds and 256MiB memory; a complex/unreadable or encrypted file gets an actionable error. Documents download only after owner/staff authorization. Saved details remain when a file fails. Drafts expire after seven days; cleanup preserves every accepted proof, including older proof referenced by correction audit evidence. Accepted intent records retain only their result, not a second copy of form data.
-
-A verified owner can edit allowlisted values only while PENDING, review before/after values, and prove sensitive changes with a fresh code bound to that application/version/change digest. Commit locks and rechecks both record and proposal, stores changed values in private audit, increments receipt version and preserves ID/number/contact/original submission date. A newer correction or decision rejects the stale request. Self-service cannot replace both original name and DOB. Decided cases and identity substitution require assisted verification; no verified assisted contact channel was supplied, so the portal states that limitation without inventing contact details.
-
-Tracking lists the contact's accepted records and saved drafts. Fresh contact verification can resume an owned draft even after intake closure, but cannot turn it into a new accepted application after the configured deadline. Operational logs omit bank/name/code payloads; private audit retains necessary before/after evidence.
-
-Browser verification (development tools only):
-
-```sh
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python -B -m pytest -q
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python -B tests/restore_baseline.py \
+  --seed seed/seed.sql --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python -B tests/replay_submission.py \
+  --seed seed/seed.sql --sha256 0738bde4c5cba055475328d740106844d6640f77ea02b1b703e629dbf231f320
 .venv/bin/python -m pip install -r tests/requirements-browser.txt
 .venv/bin/python -m playwright install chromium
-PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python tests/browser_journey.py
+PG_BIN_DIR=/usr/lib/postgresql/15/bin .venv/bin/python -B tests/browser_journey.py
 ```
 
-This owns a disposable synthetic PostgreSQL/Gunicorn/gateway stack and accepts no external target. It tests two real no-JS applications, a widow, shared phone, PDF/JPG above the old limit, linked errors/input retention, keyboard navigation, owner correction, staff and gateway, mobile 390px and a 200%-equivalent reflow configuration. Optional `--screenshots /PRIVATE/OUTPUT` captures synthetic images for review; keep them out of Git. The private fixture uses a one-second resend cooldown to keep the browser test bounded; normal runtime defaults to 60 seconds and dedicated security tests verify it. These checks are not a claim of full WCAG certification.
+The final native core run passed **152 tests in 156.16 s** on Python3.12.3/PostgreSQL15.19; the actual Docker Python3.11 service also passed the retained localhost browser journey. Native tests own disposable PostgreSQL 15 Unix-socket clusters with no TCP listener; no SQLite substitute or real citizen fixtures. Use `PG_SHARE_DIR` only for relocated PostgreSQL packages. Restore/replay tools accept no external target and reconcile every original row/account/sequence; the scheduler is disabled during measurement. Tools include pytest, Playwright/Chromium, pypdf, PostgreSQL COPY/EXPLAIN and ordinary resource counters.
+
+For the actual localhost Docker service, `tests/live_local_journey.py --admin-file PRIVATE_JSON --output PRIVATE_DIRECTORY` uses a private JSON object with `username`/`password`. It respects the real resend cooldown, keeps one labeled synthetic application and checks Indic DB/HTML/PDF, widow/no-JS/mobile, configured staff, inherited OTP continuity, owner correction/SLA and negative access. Keep generated files ignored/private.
+
+To prove real cron without altering the host clock:
+
+```sh
+docker build -f tests/Dockerfile.scheduler-verify -t sewasetu-scheduler-verify:local tests
+.venv/bin/python -B tests/verify_scheduler.py
+```
+
+This test-only image adds libfaketime to an isolated scheduler container; the real daemon/schedule/entrypoint run against a fresh synthetic DB on an internal Docker network with no published ports. The shim is absent from runtime images.
+
+## Scheduler, outbox and historical data
+
+Enable the scheduler with `docker compose --profile scheduler up -d`. Its installed daemon timezone is `/etc/localtime → Asia/Kolkata`; `0 2 * * *` invokes the statutory entry point. Every minute processes a bounded outbox batch; hourly cleanup removes expired sessions/OTP, bounded expired unsubmitted drafts and aged orphan proof. Accepted proof and prior proof retained in audit are protected. Cleanup does not delete accepted applications.
+
+```sh
+docker compose exec -T app python /app/scripts/deemed_approval.py --dry-run
+docker compose logs --tail 100 scheduler
+python3 ops/audit_data.py
+# Private restored-data catch-up: backup + encrypted manifest + reconciliation
+python3 ops/catchup.py --destination backups --passphrase-file secrets/backup-passphrase
+# Optional bounded normal-worker backlog processing; never marks delivery itself
+python3 ops/drain_outbox.py --max-seconds 300 --max-batches 200
+```
+
+The verified localhost catch-up transitioned exactly **4,871** eligible PENDING applications with matching audits, while original non-decision fields, accounts, sequence and every non-eligible decision reconciled unchanged. All4,873 resulting submission/correction/decision events were confirmed DELIVERED through the actual gateway; no pending/queued/failed events remained after bounded catch-up. One labeled synthetic application from live verification is retained. A first restored-data catch-up requires a private before/after row manifest, current backup and immutable-field/account/sequence reconciliation. The job locks overlap, recomputes cutoff per batch, changes only eligible PENDING rows, and commits decision/audit/unique outbox together. Already-decided rows stay untouched. Worker leases, retries/backoff and gateway event keys prevent duplicates. `QUEUED` is not `DELIVERED`; staff dashboard shows pending/queued/failed counts and sanitized errors. Investigate failures rather than marking them delivered. Correcting an erroneous automatic decision requires reviewing its exact private manifest/current row, a guarded compensating transaction/audit and cancellation of unsent events; a sent SMS cannot be unsent. Whole-DB restore is not normal decision rollback.
+
+Read-only identity audit found 195 names exactly at the old 20-byte boundary and 42,825 DOBs with day/month both ≤12. These are patterns, not proof. No historical name/date was guessed or blanket-swapped, and password hashes are not independent DOB evidence. All 100,002 inherited documents are absent in the handout; the UI says so honestly.
+
+## Backups, restore and rollback
+
+Run `python3 ops/configure_backup.py` once to create a new private 0600 backup passphrase file (it refuses to overwrite one), and keep a separate recovery copy. Do not print it or put it in a command argument. Then:
+
+```sh
+python3 ops/backup.py --destination backups --passphrase-file secrets/backup-passphrase
+python3 ops/check_backup.py --directory backups --max-age-hours 30
+python3 ops/verify_restore.py --archive backups/SELECTED_SNAPSHOT.tar.gpg \
+  --passphrase-file secrets/backup-passphrase
+```
+
+Backup briefly quiesces app/scheduler/gateway, takes a consistent custom-format PostgreSQL dump plus uploads/gateway, checks unchanged aggregates, writes file checksums and encrypts the archive with GnuPG AES-256 integrity protection. It resumes previously running services even on failure. Restore verification decrypts privately, validates paths/checksums and restores into a **new offline disposable container**, comparing records/accounts/sequence and runtime files; it never restores over the running database. Keep daily encrypted copies off-host with a separately held key; adopt 30 daily/4 weekly retention and monitor disk/freshness/failures. Local copies alone are not disaster recovery. Host `ops/sewasetu-backup.service`/`.timer` specify daily 03:15 IST with missed-run catch-up; review/install actual VM paths, enable the timer and connect failures/freshness to a real responsible operator. These VM/off-host arrangements are not claimed as deployed locally.
+
+Keep the previous immutable image/release identifier before deploy. For a compatible additive schema, stop scheduler, set private `RELEASE_SHA` to the prior verified image tag, recreate app/scheduler with `--no-build`, check readiness/journeys and preserve the same DB/uploads/gateway volumes. Never restore a stale DB as the default image rollback: it would discard new writes. For an incompatible schema, rehearse a specific forward repair/compatibility plan first.
+
+## VM deployment and submission checklist (operator-managed)
+
+1. Provision/pay an owned VM and stable public hostname/IP; configure firewall/SSH, off-host backup destination and a named alert responder. Public ingress goes through Nginx only; DB/gateway stay private. A single VM is not high availability.
+2. On the VM, use the private seed/environment and fresh-install procedure. Set `PUBLIC_BASE_URL=https://ACTUAL_HOST`, `PORTAL_HOST=ACTUAL_HOST`, valid TLS files under private `secrets/tls/`, and use **`docker compose -f docker-compose.yml --profile production --profile scheduler up -d --build --wait`**. The explicit file excludes the local HTTP override. Verify TLS chain, Secure/HttpOnly/SameSite cookies, fixed proxy headers, Nginx body/time limits, public release SHA, full synthetic journeys and admin/gateway from outside the VM. Test host reboot, actual scheduled execution, backup restore and compatible rollback. Configure external liveness/freshness alerts; keep the service paid/up until assessment completion, potentially 30 days.
+3. Produce and verify the handover archive outside the repository with `python3 ops/package_handover.py --output /PRIVATE/OUTSIDE_REPO/sewasetu.zip`; it includes full `.git`, audits current active credentials/history and verifies unzip/history/clean status. Verify fresh local-clone setup with `python3 ops/verify_fresh_clone.py --admin-file secrets/admin-access.json` using the private credential JSON. It uses a uniquely named disposable Compose project with no published ports, the original private seed/environment, and no scheduler during baseline. Manually create a private GitHub repository, push the full unsquashed history and invite `harshnisar`. Personal-repository collaborators may receive write access; choose an organization repository/read role if read-only is required. Verify the invite and repository accessibility yourself; no confirmation is assumed. No repository, PR, remote, push or invitation is created by the application tools.
+4. Supply repository URL, public portal URL, ZIP with full `.git`, working staff credentials privately, and a real face/screen Loom ≤3 minutes. Recheck links, public release SHA and credentials at submission. Do not submit localhost as a public URL.
+
+Suggested human Loom outline: 0:00–0:25 evidence and inherited-data constraints; 0:25–1:45 the five ranked fixes above with short live security/receipt/correction/decision demonstrations; 1:45–2:25 red→green history and measured replay/restore proof; 2:25–2:55 deferred historical verification, simulated SMS confidentiality and deployment/availability limits. Record only demonstrations/results you have personally verified; this outline is not a recording.
+
+## Honest limits and evidence gap
+
+The mandated public fake gateway exposes delivered messages/codes and contacts; it cannot provide real SMS confidentiality. OTP proves control of a shared contact, not universal identity or bank ownership; all records associated with that verified contact are disclosed with explicit shared-phone guidance. No unique-mobile constraint excludes another adult. Self-service correction is PENDING-only, requires reviewed versioned changes/step-up for sensitive fields, preserves identity anchors/SLA and denies decided records; no verified assisted-correction service/phone was supplied. Name+age-proof facts and bank ownership are not independently verified by this portal. Browser checks cover mobile, keyboard, no-JS and 200%-equivalent reflow; they are not a full accessibility certification.
+
+At the operator's explicit request, `/AGENTS.md` and `/docs/` remain ignored. **Their exclusion omits agent configuration/prompts and engineering evidence required by `BRIEF.md`.** Tests, migrations, operations, font licenses and unsquashed history remain trackable. No public VM, off-host alert/retention arrangement, GitHub access confirmation or authentic Loom is claimed until the operator supplies and verifies it.
