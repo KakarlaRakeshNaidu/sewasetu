@@ -1,0 +1,64 @@
+# Local planning and agent notes (excluded at the user's request)
+# BRIEF.md requires committed agent configuration/prompts; these exclusions omit that evidence.
+/docs/
+/AGENTS.md
+/IMPLEMENTATION_PLAN.md
+
+# Private configuration and secret material; preserve the public example
+.env
+.env.*
+!.env.example
+/secrets/
+/.secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Supplied private evidence: retain locally
+/seed/
+/logs/
+/dc-briefing.mp3
+
+# Local environments and Python/test/coverage caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+node_modules/
+
+# Generated browser artifacts, not test source or fixture images
+/test-results/
+/playwright-report/
+/browser-reports/
+/screenshots/
+
+# Local runtime output and generated receipts
+/uploads/
+/ack/
+/receipts/
+/app/uploads/
+/app/ack/
+/app/receipts/
+*.log
+
+# Local database dumps/backups; schema.sql and migrations stay trackable
+/backups/
+/dumps/
+*.dump
+*.backup
+
+# OS metadata and download streams, including U+F03A-prefixed names
+.DS_Store
+Thumbs.db
+Desktop.ini
+._*
+*Zone.Identifier*

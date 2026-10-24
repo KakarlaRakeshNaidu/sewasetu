@@ -1,0 +1,21 @@
+# This service builds with ./smsgw as its context
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+__pycache__
+**/__pycache__
+*.py[cod]
+**/*.py[cod]
+.pytest_cache
+.venv
+venv
+tests
+*.log
+._*
+**/._*
+*Zone.Identifier*
+**/*Zone.Identifier*
