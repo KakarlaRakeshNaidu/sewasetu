@@ -1,5 +1,6 @@
 """Durable outbox delivery with a bounded claim lease and explicit carrier confirmation."""
 import os
+import time
 from contextlib import contextmanager
 from datetime import datetime,timedelta
 from zoneinfo import ZoneInfo
@@ -13,7 +14,8 @@ def enqueue(cur,app_id,event,mobile,body,instant):
 
 
 def run_worker(database,instant=None,limit=50,gateway=None):
-    instant = instant or datetime.now(ZoneInfo('Asia/Kolkata'))
+    fixed_instant=instant
+    started=time.monotonic()
     gateway = (gateway or os.environ.get('SMS_GATEWAY_URL','http://smsgw:8025')).rstrip('/')
     done = 0
     @contextmanager
@@ -28,19 +30,22 @@ def run_worker(database,instant=None,limit=50,gateway=None):
         finally:
             conn.close()
     for _ in range(min(100,max(1,limit))):
+        if time.monotonic()-started>=40:break
+        instant=fixed_instant or datetime.now(ZoneInfo('Asia/Kolkata'))
+        lease=instant+timedelta(seconds=60)
         with transaction() as cur:
             cur.execute("SELECT id,event_key,mobile,body,status,attempts,gateway_id,delivery_checks FROM notification_outbox WHERE status IN ('PENDING','QUEUED') AND next_attempt_at<=%s AND (lease_until IS NULL OR lease_until<=%s) ORDER BY next_attempt_at,id LIMIT 1 FOR UPDATE SKIP LOCKED",(instant,instant))
             row=cur.fetchone()
             if not row:
                 break
-            cur.execute('UPDATE notification_outbox SET lease_until=%s WHERE id=%s',(instant+timedelta(seconds=60),row[0]))
+            cur.execute('UPDATE notification_outbox SET lease_until=%s WHERE id=%s',(lease,row[0]))
         ident,event,mobile,body,status,attempts,gateway_id,checks=row
         error=None
         delivered=False
         try:
             if status == 'PENDING':
                 attempts+=1
-                response=requests.post(gateway+'/api/send',json={'to':mobile,'text':body,'event_key':event},timeout=(2,5))
+                response=requests.post(gateway+'/api/send',json={'to':mobile,'text':body,'event_key':event},timeout=(2,5),allow_redirects=False)
                 if response.status_code not in (200,202):
                     raise ValueError('HTTP_'+str(response.status_code))
                 data=response.json()
@@ -49,7 +54,7 @@ def run_worker(database,instant=None,limit=50,gateway=None):
                 gateway_id=data['id'];status='QUEUED'
             else:
                 checks+=1
-                response=requests.get(gateway+'/api/messages',params={'to':mobile},timeout=(2,5))
+                response=requests.get(gateway+'/api/messages',params={'to':mobile},timeout=(2,5),allow_redirects=False)
                 if response.status_code != 200:
                     raise ValueError('HTTP_'+str(response.status_code))
                 delivered=any(x.get('id')==gateway_id and x.get('delivered') is True for x in response.json()['messages'])
@@ -62,9 +67,10 @@ def run_worker(database,instant=None,limit=50,gateway=None):
         if (error and attempts+checks>=8) or (not delivered and checks>=8):
             status='FAILED'
         delay=min(3600,5*2**min(attempts+checks,9)) if error else 5
+        completed=fixed_instant or datetime.now(ZoneInfo('Asia/Kolkata'))
         with transaction() as cur:
-            cur.execute('UPDATE notification_outbox SET status=%s,attempts=%s,gateway_id=%s,delivery_checks=%s,next_attempt_at=%s,lease_until=NULL,last_error=%s,delivered_at=%s WHERE id=%s',
-                (status,attempts,gateway_id,checks,instant+timedelta(seconds=delay),error,instant if delivered else None,ident))
+            cur.execute('UPDATE notification_outbox SET status=%s,attempts=%s,gateway_id=%s,delivery_checks=%s,next_attempt_at=%s,lease_until=NULL,last_error=%s,delivered_at=%s WHERE id=%s AND lease_until=%s',
+                (status,attempts,gateway_id,checks,completed+timedelta(seconds=delay),error,completed if delivered else None,ident,lease))
         done+=1
     return done
 
